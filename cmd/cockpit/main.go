@@ -9,6 +9,7 @@ import (
 
 	"path/filepath"
 
+	"cockpit/internal/gitcmd"
 	"cockpit/internal/initcmd"
 	"cockpit/internal/mcpserver"
 	"cockpit/internal/observecmd"
@@ -48,6 +49,8 @@ func main() {
 		runObserve(args[1:])
 	case "serve":
 		runServe(args[1:])
+	case "ingest-git":
+		runIngestGit(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "cockpit: unknown subcommand %q\n\n", args[0])
 		usage(os.Stderr)
@@ -154,6 +157,30 @@ func runServe(args []string) {
 	}
 }
 
+func runIngestGit(args []string) {
+	fs := flag.NewFlagSet("ingest-git", flag.ExitOnError)
+	limit := fs.Int("n", 0, "max commits to ingest (0 = all)")
+	fs.Parse(args)
+
+	var dir string
+	if fs.NArg() > 0 {
+		dir = fs.Arg(0)
+	} else {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "cwd:", err)
+			os.Exit(1)
+		}
+		dir = cwd
+	}
+	res, err := gitcmd.Run(dir, *limit)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cockpit ingest-git:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("ingest-git: %d added, %d skipped\n", res.Added, res.Skipped)
+}
+
 func runObserve(args []string) {
 	var dir string
 	if len(args) > 0 {
@@ -175,4 +202,5 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  watch [dir]   tail <dir>/.sync/iterations.jsonl, pretty-print new entries")
 	fmt.Fprintln(w, "  observe [dir] Stop-hook handler — reads payload from stdin, auto-records iteration")
 	fmt.Fprintln(w, "  serve [dir] [-port N]  host the dashboard UI on http://localhost:7100 (default port)")
+	fmt.Fprintln(w, "  ingest-git [dir] [-n N]  walk git log, append commits as kind=commit iterations")
 }
