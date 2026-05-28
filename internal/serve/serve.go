@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os/exec"
+	"strings"
 
 	"cockpit/internal/store"
 )
@@ -35,11 +37,44 @@ func Handler(projectDir string) (http.Handler, error) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		if err := json.NewEncoder(w).Encode(state); err != nil {
-			// Headers already sent; best effort.
 			return
 		}
 	})
+	mux.HandleFunc("/git/show/", func(w http.ResponseWriter, r *http.Request) {
+		sha := strings.TrimPrefix(r.URL.Path, "/git/show/")
+		if !isHexSHA(sha) {
+			http.Error(w, "invalid sha", http.StatusBadRequest)
+			return
+		}
+		// --stat + --patch keeps output bounded; we still cap below.
+		out, err := exec.Command("git", "-C", projectDir, "show", "--stat", "--patch", sha).CombinedOutput()
+		if err != nil {
+			http.Error(w, "git show failed: "+strings.TrimSpace(string(out)), http.StatusInternalServerError)
+			return
+		}
+		// Cap at 64KiB so a huge merge commit can't OOM the browser tab.
+		const cap = 64 << 10
+		if len(out) > cap {
+			out = append(out[:cap], []byte("\n\n… (truncated; run `git show "+sha+"` to see the full diff)\n")...)
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(out)
+	})
 	return mux, nil
+}
+
+// isHexSHA accepts 4..40 hex chars (matches both short and full git SHAs).
+func isHexSHA(s string) bool {
+	if len(s) < 4 || len(s) > 40 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 // Run starts a blocking HTTP server. Listens on addr (e.g. "localhost:7100").

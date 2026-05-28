@@ -135,8 +135,40 @@ html, body {
   50% { box-shadow: 0 0 0 6px rgba(239,184,93,0); }
 }
 .vtl-item .vtl-when { color: var(--text-4); font-size: 9.5px; margin-top: 1px; }
-.vtl-item.commit { color: var(--amber); }
+.vtl-item.commit { color: var(--amber); cursor: pointer; }
+.vtl-item.commit:hover { color: var(--amber-bright); }
+.vtl-item[data-kind="iteration"] { cursor: pointer; }
 .vtl-item.commit .vtl-sha { font-size: 9.5px; color: var(--text-3); margin-top: 1px; }
+.vtl-item.expanded { color: var(--amber-bright); background: var(--amber-bg); border-radius: 2px; }
+
+/* Inline diff panel that appears below a rail commit item */
+.rail-diff {
+  margin: 4px 0 10px -16px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--amber);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre;
+}
+.rail-diff-pre { white-space: pre; }
+.rail-diff .diff-file { color: var(--text-2); display: block; }
+.rail-diff .diff-hunk { color: var(--amber); display: block; }
+.rail-diff .diff-add  { color: var(--green); display: block; }
+.rail-diff .diff-del  { color: var(--red); display: block; }
+.rail-diff .diff-meta { color: var(--text-3); display: block; }
+
+/* Flash highlight when a card is scrolled to via rail click */
+.card.flash { animation: cardFlash 1.2s ease; }
+@keyframes cardFlash {
+  0%   { box-shadow: 0 0 0 0 rgba(212, 161, 74, 0.6); }
+  30%  { box-shadow: 0 0 0 4px rgba(212, 161, 74, 0.5); }
+  100% { box-shadow: 0 0 0 0 rgba(212, 161, 74, 0); }
+}
 
 /* MAIN */
 .main { overflow: auto; padding: 24px 28px 40px; }

@@ -305,13 +305,75 @@ function renderTimeline(iters) {
     else if (i === 0) klass += ' active';
     else if (i < 3) klass += ' recent';
     item.className = klass;
+    item.dataset.kind = it.kind;
     if (it.kind === 'commit') {
+      item.dataset.sha = it.sha || '';
       item.innerHTML = `${escapeHTML(it.sha?.slice(0, 7) || '?')}<div class="vtl-sha">${escapeHTML(truncate(it.summary || '', 36))} · ${relTime(it.ts)}</div>`;
     } else {
+      item.dataset.iterId = String(it.id);
       item.innerHTML = `iter #${it.id} · ${escapeHTML(truncate(it.summary || '', 36))}<div class="vtl-when">${relTime(it.ts)}${i === 0 ? ' · active' : ''}</div>`;
     }
     tl.appendChild(item);
   });
+}
+
+async function showCommitDiff(item, sha) {
+  // Toggle: if a diff panel already follows this item, remove it.
+  const existing = item.nextElementSibling;
+  if (existing?.classList?.contains('rail-diff')) {
+    existing.remove();
+    item.classList.remove('expanded');
+    return;
+  }
+  // Remove any other open rail-diff first (single-open).
+  document.querySelectorAll('.rail-diff').forEach(d => d.remove());
+  document.querySelectorAll('.vtl-item.expanded').forEach(d => d.classList.remove('expanded'));
+
+  const panel = document.createElement('div');
+  panel.className = 'rail-diff';
+  panel.textContent = 'loading…';
+  item.after(panel);
+  item.classList.add('expanded');
+
+  try {
+    const r = await fetch('/git/show/' + encodeURIComponent(sha));
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+    const text = await r.text();
+    panel.innerHTML = '';
+    panel.appendChild(formatDiffText(text));
+  } catch (e) {
+    panel.textContent = 'error: ' + (e.message || e);
+  }
+}
+
+// Render a git-show output: color +/- lines, dim @@ hunk headers + file headers.
+function formatDiffText(text) {
+  const pre = document.createElement('pre');
+  pre.className = 'rail-diff-pre';
+  text.split('\n').forEach(line => {
+    const span = document.createElement('span');
+    span.textContent = line + '\n';
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ')) span.className = 'diff-file';
+    else if (line.startsWith('@@')) span.className = 'diff-hunk';
+    else if (line.startsWith('+')) span.className = 'diff-add';
+    else if (line.startsWith('-')) span.className = 'diff-del';
+    else if (line.startsWith('commit ') || line.startsWith('Author:') || line.startsWith('Date:')) span.className = 'diff-meta';
+    pre.appendChild(span);
+  });
+  return pre;
+}
+
+function scrollToIteration(iterId) {
+  const card = document.querySelector(`.card[data-card-id="iter-${iterId}"]`);
+  if (!card) {
+    // No delta card for that iteration (likely older than the deltas section shows).
+    // Flash the rail item to acknowledge the click anyway.
+    return false;
+  }
+  card.scrollIntoView({behavior: 'smooth', block: 'center'});
+  card.classList.add('flash');
+  setTimeout(() => card.classList.remove('flash'), 1200);
+  return true;
 }
 
 function empty(text) {
@@ -341,6 +403,21 @@ function escapeHTML(s) {
 
 // ===== Event delegation: handles clicks even after re-renders =====
 document.addEventListener('click', e => {
+  // Rail item clicks (commits show diff, iterations scroll to delta card)
+  const railItem = e.target.closest('.vtl-item');
+  if (railItem) {
+    if (railItem.dataset.kind === 'commit' && railItem.dataset.sha) {
+      e.stopPropagation();
+      showCommitDiff(railItem, railItem.dataset.sha);
+      return;
+    }
+    if (railItem.dataset.kind === 'iteration' && railItem.dataset.iterId) {
+      e.stopPropagation();
+      scrollToIteration(railItem.dataset.iterId);
+      return;
+    }
+  }
+
   const card = e.target.closest('.card');
   if (!card) return;
   const id = card.dataset.cardId;
