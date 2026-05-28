@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>cockpit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/sync.css">
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <div class="brand">COCKPIT</div>
+    <div class="crumbs"><span class="repo">cockpit</span></div>
+    <div class="sync-state">
+      <span class="sync-dot" id="syncDot"></span>
+      <span id="status">connecting…</span>
+    </div>
+  </header>
+  <div class="body">
+    <aside class="rail">
+      <div class="rail-section">
+        <div class="rail-title">ITERATIONS</div>
+        <div id="timeline" class="vtl"></div>
+      </div>
+    </aside>
+    <main class="main">
+      <div id="app" class="main-inner"></div>
+    </main>
+  </div>
+</div>
+<script src="/sync.js"></script>
+</body>
+</html>

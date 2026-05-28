@@ -1,0 +1,136 @@
+- id: evidence-required-per-claim
+  statement: "A Claim must carry at least one Evidence entry; missing-type counts."
+  category: invariant
+  status: holding
+  severity: high
+  evidence:
+    - type: test
+      path: internal/model/model_test.go
+      polarity: positive
+      note: "TestClaim_RequiresEvidence"
+    - type: code
+      path: internal/model/model.go
+      polarity: positive
+      note: "Claim.Validate() rejects empty Evidence slice"
+  established: 2026-05-27
+  established_by: agent
+  established_in_iteration: 2
+
+- id: discriminated-evidence-fields
+  statement: "Each Evidence type validates its required fields at parse time (code requires path+polarity, missing requires a valid kind, etc.)."
+  category: invariant
+  status: holding
+  severity: high
+  evidence:
+    - type: test
+      path: internal/model/model_test.go
+      polarity: positive
+      note: "TestEvidence_Code_RequiresPath, TestEvidence_Code_RequiresPolarity, TestEvidence_Missing_RequiresKind, TestEvidence_Commit_RequiresSHA, TestEvidence_Metric_RequiresRef, TestEvidence_UnknownType"
+  established: 2026-05-27
+  established_by: agent
+  established_in_iteration: 2
+
+- id: composite-iteration-key
+  statement: "(kind, id) is the uniqueness key for Iteration entries — iter#3 and commit#3 may coexist."
+  category: invariant
+  status: holding
+  severity: med
+  evidence:
+    - type: test
+      path: internal/model/model_test.go
+      polarity: positive
+      note: "TestState_SameIDDifferentKind_OK"
+    - type: code
+      path: internal/model/model.go
+      polarity: positive
+      note: "State.Validate() uses an entryKey{kind,id} composite map"
+  established: 2026-05-27
+  established_by: agent
+  established_in_iteration: 3
+
+- id: claim-id-uniqueness
+  statement: "Two claims cannot share an id."
+  category: invariant
+  status: holding
+  severity: high
+  evidence:
+    - type: test
+      path: internal/model/model_test.go
+      polarity: positive
+      note: "TestState_DuplicateClaimID"
+  established: 2026-05-27
+  established_by: agent
+  established_in_iteration: 2
+
+- id: commit-requires-sha
+  statement: "Iteration with kind=commit requires a non-empty SHA; iteration of kind=iteration does not."
+  category: contract
+  status: holding
+  severity: med
+  evidence:
+    - type: test
+      path: internal/model/model_test.go
+      polarity: positive
+      note: "TestIteration_Commit_RequiresSHA"
+  established: 2026-05-27
+  established_by: agent
+  established_in_iteration: 2
+
+- id: store-load-returns-typed-error
+  statement: "store.Load(dir) returns a typed error (not panic) when .sync/ files are missing or malformed."
+  category: contract
+  status: suspected
+  severity: high
+  evidence:
+    - type: missing
+      kind: verification
+      note: "internal/store/ does not exist yet; Phase 0 S3 is the implementation slice"
+  established: 2026-05-27
+  established_by: agent
+
+- id: supersede-mechanism-detects-rollback
+  statement: "Iterations are marked superseded when the Claude transcript no longer contains their message_id OR when files_changed hashes diverge from current content."
+  category: contract
+  status: suspected
+  severity: high
+  evidence:
+    - type: code
+      path: internal/model/model.go
+      polarity: positive
+      note: "Iteration schema carries TranscriptMessageID, FileHashes, SupersededAt, SupersededReason; Validate enforces the at/reason pair"
+    - type: missing
+      kind: verification
+      note: "watcher (Phase 2) + reconcile (Phase 5) not implemented; only the schema is in place"
+  established: 2026-05-27
+  established_by: agent
+  established_in_iteration: 3
+
+- id: writer-runs-via-stop-hook
+  statement: "Writer captures iterations via Claude Code's Stop hook → cockpit observe → sub-agent → MCP, not via a Claude Code skill."
+  category: contract
+  status: suspected
+  severity: high
+  evidence:
+    - type: missing
+      kind: decision
+      note: "Architecture decided in conversation 2026-05-27 (pivoted from DESIGN.md §5.1's sync-skill). No ADR yet."
+    - type: missing
+      kind: verification
+      note: "no MCP server, hook config snippet, or cockpit observe subcommand exists yet — Phase 5"
+  established: 2026-05-27
+  established_by: jai
+
+- id: project-is-git-repo
+  statement: "Cockpit's repo is a git repository so .sync/ artifacts can be reviewed in PRs alongside code."
+  category: assumption
+  status: holding
+  severity: med
+  evidence:
+    - type: code
+      path: .git/HEAD
+      polarity: positive
+      note: "git initialized 2026-05-27 in-session; claim flipped violated → holding as a live dogfood example"
+  established: 2026-05-27
+  established_by: design
+  established_in_iteration: 1
+  last_verified: 2026-05-27T15:35:00Z

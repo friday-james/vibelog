@@ -1,0 +1,28 @@
+intent:
+  statement: "A cognitive-coupling display for AI-assisted coding — keeps a developer's mental model in sync with a fast-moving agent."
+  evidence:
+    - type: doc
+      path: DESIGN.md
+      note: "design spec v1; problem statement in §1, success criteria in §11"
+    - type: doc
+      path: example.html
+      note: "visual reference mockup; the v1 UI's shape, colors, expansion behavior"
+  established: 2026-05-27
+  established_by: jai
+
+approach:
+  statement: "Go single-binary CLI; YAML+JSONL state under .sync/; HTTP+SSE server; Stop-hook + sub-agent writer."
+  evidence:
+    - type: decision
+      path: DESIGN.md
+      note: "stack table §7 originally specified Python+FastAPI; flipped to Go for single-binary install UX (this session, 2026-05-27)"
+    - type: decision
+      path: DESIGN.md
+      note: "writer architecture: MCP tools + Stop hook + sub-agent (this session, 2026-05-27) — not PostToolUse; sub-agent isolates main-context bloat"
+  last_changed: 2026-05-27T15:00:00Z
+  change_reason: "Stack flipped Python → Go; writer flipped from skill → MCP + Stop hook + sub-agent"
+
+now:
+  statement: "Phase 0 S3 — wiring store.Load() so the sample fixture parses end-to-end."
+  iteration_id: 4
+  started: 2026-05-27T15:30:00Z
