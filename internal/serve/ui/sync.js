@@ -89,10 +89,9 @@ function updateVelocity(s) {
   document.getElementById('vvalAgent').textContent = fmtRate(agentPerMin);
   document.getElementById('vvalHuman').textContent = fmtRate(humanPerMin);
 
-  // DRIFT: agent ≫ human for sustained window. Since human=0 always for now,
-  // any sustained agent activity triggers drift. Threshold tuned to avoid spurious.
-  const drift = agentPerMin > 0.5 && humanPerMin < 0.1;
-  document.getElementById('vdrift').classList.toggle('active', drift);
+  // DRIFT: only meaningful once we track human acks (Phase 4). Until then,
+  // a permanently-active pulse is salience pollution. Stay quiet.
+  document.getElementById('vdrift').classList.toggle('active', false);
 }
 
 function fmtRate(r) {
@@ -166,31 +165,38 @@ function render(s) {
   const app = document.getElementById('app');
   app.innerHTML = '';
 
-  // ANCHOR
-  app.appendChild(sectionHeader('ANCHOR · WHAT YOU\'RE BUILDING', 'click any to expand'));
-  app.appendChild(anchorCard('anchor', 'anchor-intent', '01',
-    s.anchor.intent.statement, intentMeta(s.anchor.intent), s.anchor.intent));
-  app.appendChild(anchorCard('anchor', 'anchor-approach', '02',
-    s.anchor.approach.statement, approachMeta(s.anchor.approach), s.anchor.approach));
-  // "now" L2 — synthesize evidence from the latest iteration's files_changed
-  // so the auto-expanded card isn't empty (mockup has rich narrative; our
-  // data doesn't, so we surface what we DO have).
-  const latestIter = (s.iterations || []).slice().reverse().find(it => it.kind === 'iteration');
+  // STATUS BANNER — single-glance answer to "is anything broken?"
+  // Deviation from example.html: justified because the mockup pushes VIOLATED
+  // below the fold at common laptop viewports (1440x900).
+  const claims = s.claims || [];
+  const violated = claims.filter(c => c.status === 'violated');
+  const suspected = claims.filter(c => c.status === 'suspected');
+  const holding = claims.filter(c => c.status === 'holding');
+  const allIters = s.iterations || [];
+  const recent = allIters.slice().sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, 5);
+  app.appendChild(statusBanner(violated.length, suspected.length, holding.length, recent.length));
+
+  // ANCHOR — "now" first (the urgent question), then approach, then intent.
+  // Deviation: mockup orders intent/approach/now top-to-bottom; we invert
+  // because "what is the agent doing right now?" is the most temporally
+  // urgent question for the dashboard's primary use case.
+  const latestIter = allIters.slice().reverse().find(it => it.kind === 'iteration');
   const nowEvidence = [];
   if (latestIter?.files_changed?.length) {
     latestIter.files_changed.slice(0, 6).forEach(f => {
       nowEvidence.push({ type: 'code', path: f, polarity: 'positive', note: `touched in iter #${latestIter.id}` });
     });
   }
+  app.appendChild(sectionHeader('ANCHOR · WHAT YOU\'RE BUILDING', 'click any to expand'));
   app.appendChild(anchorCard('editing', 'anchor-now', '▸',
     s.anchor.now.statement, nowMeta(s.anchor.now), { evidence: nowEvidence }, 1));
+  app.appendChild(anchorCard('anchor', 'anchor-approach', '02',
+    s.anchor.approach.statement, approachMeta(s.anchor.approach), s.anchor.approach));
+  app.appendChild(anchorCard('anchor', 'anchor-intent', '01',
+    s.anchor.intent.statement, intentMeta(s.anchor.intent), s.anchor.intent));
 
-  // DELTAS — 5 most recent entries (iterations + commits interleaved by ts)
-  const allIters = s.iterations || [];
-  const recent = allIters
-    .slice()
-    .sort((a, b) => new Date(b.ts) - new Date(a.ts))
-    .slice(0, 5);
+  // DELTAS — 5 most recent entries (iterations + commits interleaved by ts).
+  // `recent` was computed above for the status banner.
   app.appendChild(sectionHeader('DELTAS · WHAT CHANGED SINCE YOU LAST LOOKED',
     recent.length ? `${recent.length} unack'd · 0 ack'd` : 'none'));
   if (recent.length === 0) {
@@ -201,32 +207,35 @@ function render(s) {
     });
   }
 
-  // CLAIMS · VIOLATED
-  const claims = s.claims || [];
-  const violated = claims.filter(c => c.status === 'violated');
+  // CLAIMS · VIOLATED (variables computed at top of render for banner)
   app.appendChild(sectionHeader('CLAIMS · VIOLATED',
     violated.length === 0 ? 'none' : `${violated.length} violated · hard stop before merge`, 'violated'));
   if (violated.length === 0) app.appendChild(empty('(none)'));
   else violated.forEach(c => app.appendChild(claimCard(c, 'violated')));
 
-  // CLAIMS · AT RISK FROM THIS EDIT (status=suspected, per audit #6)
-  const suspected = claims.filter(c => c.status === 'suspected');
+  // CLAIMS · AT RISK FROM THIS EDIT
   app.appendChild(sectionHeader('CLAIMS · AT RISK FROM THIS EDIT',
     suspected.length === 0 ? 'none' : `${suspected.length} amber · derived from blast radius`, 'risk'));
   if (suspected.length === 0) app.appendChild(empty('(none)'));
   else suspected.forEach(c => app.appendChild(claimCard(c, 'risk')));
 
-  // CLAIMS · HOLDING (compact list) — visible by default, matches example.html
-  const holding = claims.filter(c => c.status === 'holding');
+  // CLAIMS · HOLDING — collapsible (deviation from mockup: at 40 claims the
+  // mockup's always-expanded list dominates the fold; collapse keeps L0 light)
   app.appendChild(sectionHeader('CLAIMS · HOLDING (REFERENCE)',
-    holding.length === 0 ? 'none' : `${holding.length} with positive evidence · click any to expand`));
+    holding.length === 0 ? 'none' : `${holding.length} with positive evidence`, 'holding'));
   if (holding.length === 0) {
     app.appendChild(empty('(none)'));
   } else {
+    const details = document.createElement('details');
+    details.className = 'section-collapsible';
+    const summary = document.createElement('summary');
+    summary.textContent = `expand ${holding.length} holding claim${holding.length === 1 ? '' : 's'}`;
+    details.appendChild(summary);
     const grid = document.createElement('div');
     grid.className = 'compact-list';
     holding.forEach(c => grid.appendChild(compactItem(c)));
-    app.appendChild(grid);
+    details.appendChild(grid);
+    app.appendChild(details);
   }
 
   // BLAST RADIUS · what this edit touches
@@ -240,6 +249,25 @@ function render(s) {
     const id = card.dataset.cardId;
     if (depthMemory[id]) card.dataset.depth = depthMemory[id];
   });
+}
+
+// statusBanner answers "is anything broken?" in one glance. Clicks scroll to
+// the matching section.
+function statusBanner(violatedN, riskN, holdingN, deltaN) {
+  const wrap = document.createElement('div');
+  wrap.className = 'status-banner';
+  const chip = (klass, target, n, label) => {
+    const c = document.createElement('div');
+    c.className = `banner-chip ${klass}` + (n > 0 ? ' has-count' : '');
+    c.dataset.bannerTarget = target;
+    c.innerHTML = `<span class="bc-n">${n}</span><span class="bc-l">${escapeHTML(label)}</span>`;
+    return c;
+  };
+  wrap.appendChild(chip('sev-violated', 'VIOLATED', violatedN, 'violated'));
+  wrap.appendChild(chip('sev-risk',     'AT RISK',  riskN,     'at risk'));
+  wrap.appendChild(chip('sev-holding',  'HOLDING',  holdingN,  'holding'));
+  wrap.appendChild(chip('sev-delta',    'DELTAS',   deltaN,    'deltas'));
+  return wrap;
 }
 
 function sectionHeader(title, count, sev) {
@@ -717,6 +745,16 @@ function escapeHTML(s) {
 
 // ===== Event delegation (survives DOM rebuilds) =====
 document.addEventListener('click', e => {
+  // status banner chips scroll to the matching section
+  const bannerChip = e.target.closest('.banner-chip');
+  if (bannerChip) {
+    e.stopPropagation();
+    const t = bannerChip.dataset.bannerTarget;
+    const target = [...document.querySelectorAll('.section-title')].find(s => s.textContent.includes(t));
+    target?.closest('.section-header')?.scrollIntoView({behavior: 'smooth', block: 'start'});
+    return;
+  }
+
   // depth buttons in rail
   const depthBtn = e.target.closest('.depth-btn');
   if (depthBtn) {

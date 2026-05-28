@@ -234,6 +234,55 @@ body::before {
   color: var(--text-2);
 }
 .section-count { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); }
+/* Severity coloring — JS emits sev-* classes; surface them so "is anything
+   broken?" pops out in <5s. Deviation from mockup: justified because mockup
+   leaves section titles uniform and fails the 5s-glance test at 1440x900. */
+.section-header.sev-violated { border-bottom-color: var(--red); }
+.section-header.sev-violated .section-title { color: var(--red); }
+.section-header.sev-violated .section-count { color: var(--red); font-weight: 600; }
+.section-header.sev-risk .section-title { color: var(--amber-bright); }
+.section-header.sev-risk .section-count { color: var(--amber-bright); }
+.section-header.sev-holding .section-title { color: var(--green-dim); }
+
+/* Status banner above the fold — answers "is anything broken?" in one glance */
+.status-banner {
+  display: flex; gap: 16px; align-items: center; justify-content: flex-start;
+  padding: 12px 16px; margin-bottom: 18px;
+  background: var(--surface); border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font-family: var(--font-mono); font-size: 11px;
+}
+.banner-chip {
+  display: flex; align-items: center; gap: 6px;
+  cursor: pointer; padding: 4px 10px; border-radius: 3px;
+  border: 1px solid transparent;
+  transition: border-color 0.15s, background 0.15s;
+}
+.banner-chip:hover { border-color: var(--border); }
+.banner-chip .bc-n { font-weight: 600; font-size: 14px; font-family: var(--font-sans); }
+.banner-chip .bc-l { color: var(--text-3); letter-spacing: 0.1em; text-transform: uppercase; font-size: 9.5px; }
+.banner-chip.sev-violated .bc-n { color: var(--red); }
+.banner-chip.sev-violated.has-count { background: var(--red-bg); border-color: var(--red-dim); }
+.banner-chip.sev-risk .bc-n { color: var(--amber-bright); }
+.banner-chip.sev-risk.has-count { background: var(--amber-bg); border-color: var(--amber-dim); }
+.banner-chip.sev-holding .bc-n { color: var(--green); }
+.banner-chip.sev-delta .bc-n { color: var(--text); }
+
+/* Collapsible HOLDING (and others) — at 4 claims fine, at 40 dominates fold */
+.section-collapsible summary {
+  cursor: pointer; list-style: none;
+  color: var(--text-3); font-family: var(--font-mono); font-size: 11px;
+  padding: 8px 0; user-select: none;
+}
+.section-collapsible summary:hover { color: var(--amber); }
+.section-collapsible summary::before { content: '▸ '; color: var(--text-4); }
+.section-collapsible[open] summary::before { content: '▾ '; color: var(--amber); }
+.section-collapsible[open] summary { color: var(--text-2); }
+
+/* L1/L2 visual weight differentiation — violated/at-risk heads heavier
+   so urgency reads ahead of stable content */
+.card.status-violated .card-head { font-size: 14.5px; font-weight: 500; }
+.card.status-risk .card-head { font-size: 14.5px; font-weight: 500; }
 
 /* UNIFIED CARD */
 .card {
