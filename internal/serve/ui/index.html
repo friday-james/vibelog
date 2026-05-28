@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>cockpit</title>
+<title>cockpit — Claim Ledger</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -10,22 +10,46 @@
 </head>
 <body>
 <div class="app">
-  <header class="header">
+  <header class="header fade-in">
     <div class="brand">COCKPIT</div>
-    <div class="crumbs"><span class="repo">cockpit</span></div>
+    <div class="crumbs"><span class="repo">cockpit</span><span class="sep">/</span><span class="branch" id="branch">main</span></div>
+
+    <div class="velocity" title="Agent vs human iteration rate — drift surfaces when agent ≫ you">
+      <div class="vmeter">
+        <span class="vlabel">AGENT</span>
+        <div class="vbar"><div class="vbar-fill" id="vbarAgent"></div></div>
+        <span class="vval" id="vvalAgent">0/min</span>
+      </div>
+      <div class="vmeter">
+        <span class="vlabel">YOU</span>
+        <div class="vbar"><div class="vbar-fill human" id="vbarHuman"></div></div>
+        <span class="vval" id="vvalHuman">0/min</span>
+      </div>
+      <span class="vdrift" id="vdrift">▴ DRIFT</span>
+    </div>
+
     <div class="sync-state">
       <span class="sync-dot" id="syncDot"></span>
       <span id="status">connecting…</span>
     </div>
   </header>
   <div class="body">
-    <aside class="rail">
+    <aside class="rail fade-in d1">
       <div class="rail-section">
-        <div class="rail-title">ITERATIONS</div>
+        <div class="rail-title" id="railTitle">ITERATIONS</div>
         <div id="timeline" class="vtl"></div>
       </div>
+      <div class="rail-section">
+        <div class="rail-title">DEPTH · ON DEMAND</div>
+        <div class="depths">
+          <button class="depth-btn" data-depth-cmd="model"><span class="k">?model</span>architecture<span class="desc">(not in v1)</span></button>
+          <button class="depth-btn" data-depth-cmd="claims"><span class="k">?claims</span>all claims, by status<span class="desc">jump to the full ledger</span></button>
+          <button class="depth-btn" data-depth-cmd="why"><span class="k">?why</span>rationale, last decision<span class="desc">most recent delta</span></button>
+          <button class="depth-btn" data-depth-cmd="risks"><span class="k">?risks</span>what could break now<span class="desc">at-risk + violated claims</span></button>
+        </div>
+      </div>
     </aside>
-    <main class="main">
+    <main class="main fade-in d2">
       <div id="app" class="main-inner"></div>
     </main>
   </div>
