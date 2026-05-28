@@ -75,7 +75,7 @@ body::before {
   content: ''; width: 5px; height: 5px;
   background: var(--amber-bright); border-radius: 50%;
   box-shadow: 0 0 6px var(--amber-bright);
-  animation: pulse 2.4s ease-in-out infinite;
+  /* no pulse — brand doesn't need attention; reserve pulse for changing state */
 }
 @keyframes pulse { 0%,100%{opacity:.9} 50%{opacity:.4} }
 .crumbs { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-3); }
@@ -108,9 +108,11 @@ body::before {
 .vdrift {
   color: var(--amber); font-family: var(--font-mono);
   font-size: 10px; letter-spacing: 0.05em;
-  display: none;
+  /* reserve space so header items don't reflow when drift toggles */
+  visibility: hidden; opacity: 0;
+  transition: opacity 0.3s ease;
 }
-.vdrift.active { display: inline; animation: pulse 1.5s ease-in-out infinite; }
+.vdrift.active { visibility: visible; opacity: 1; animation: pulse 1.5s ease-in-out infinite; }
 
 .sync-state {
   display: flex; align-items: center; gap: 8px;
@@ -145,7 +147,7 @@ body::before {
   content: ''; position: absolute; left: 8px; top: 0; bottom: 0;
   width: 1px; background: var(--border-soft);
 }
-/* SINCE LAST SYNC amber bracket band */
+/* SINCE LAST SYNC amber bracket band over the most-recent rail items */
 .vtl-band {
   position: absolute; left: 4px; right: -16px;
   background: var(--amber-bg);
@@ -298,12 +300,15 @@ body::before {
 }
 .card-l2 { font-size: 13px; line-height: 1.6; color: var(--text); }
 .card-l2 .why-label, .card-l3 .why-label, .card-l4 .why-label {
-  display: inline-block; font-family: var(--font-mono); font-size: 9px;
-  letter-spacing: 0.18em; color: var(--text-3); margin-right: 8px;
+  display: block; font-family: var(--font-mono); font-size: 9px;
+  letter-spacing: 0.18em; color: var(--text-3); margin-bottom: 6px;
   text-transform: uppercase;
 }
 .why-text {
-  color: var(--text); font-size: 13px; line-height: 1.6;
+  color: var(--text); font-size: 13px; line-height: 1.65;
+  max-width: 68ch;
+  margin: 0 0 10px 0;
+  white-space: pre-wrap; word-wrap: break-word;
 }
 .why-text .em { color: var(--amber); font-weight: 500; }
 .why-text code {
@@ -373,7 +378,9 @@ body::before {
 
 /* compact list mode for holding claims */
 .compact-list {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin-top: 4px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 6px 14px; margin-top: 4px;
 }
 .compact-item {
   font-family: var(--font-mono); font-size: 11px; color: var(--text-2);

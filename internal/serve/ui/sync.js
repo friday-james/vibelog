@@ -172,8 +172,18 @@ function render(s) {
     s.anchor.intent.statement, intentMeta(s.anchor.intent), s.anchor.intent));
   app.appendChild(anchorCard('anchor', 'anchor-approach', '02',
     s.anchor.approach.statement, approachMeta(s.anchor.approach), s.anchor.approach));
+  // "now" L2 — synthesize evidence from the latest iteration's files_changed
+  // so the auto-expanded card isn't empty (mockup has rich narrative; our
+  // data doesn't, so we surface what we DO have).
+  const latestIter = (s.iterations || []).slice().reverse().find(it => it.kind === 'iteration');
+  const nowEvidence = [];
+  if (latestIter?.files_changed?.length) {
+    latestIter.files_changed.slice(0, 6).forEach(f => {
+      nowEvidence.push({ type: 'code', path: f, polarity: 'positive', note: `touched in iter #${latestIter.id}` });
+    });
+  }
   app.appendChild(anchorCard('editing', 'anchor-now', '▸',
-    s.anchor.now.statement, nowMeta(s.anchor.now), null, 1));
+    s.anchor.now.statement, nowMeta(s.anchor.now), { evidence: nowEvidence }, 1));
 
   // DELTAS — 5 most recent entries (iterations + commits interleaved by ts)
   const allIters = s.iterations || [];
@@ -195,18 +205,18 @@ function render(s) {
   const claims = s.claims || [];
   const violated = claims.filter(c => c.status === 'violated');
   app.appendChild(sectionHeader('CLAIMS · VIOLATED',
-    violated.length === 0 ? 'none' : `${violated.length} violated · hard stop before merge`));
+    violated.length === 0 ? 'none' : `${violated.length} violated · hard stop before merge`, 'violated'));
   if (violated.length === 0) app.appendChild(empty('(none)'));
   else violated.forEach(c => app.appendChild(claimCard(c, 'violated')));
 
   // CLAIMS · AT RISK FROM THIS EDIT (status=suspected, per audit #6)
   const suspected = claims.filter(c => c.status === 'suspected');
   app.appendChild(sectionHeader('CLAIMS · AT RISK FROM THIS EDIT',
-    suspected.length === 0 ? 'none' : `${suspected.length} amber · derived from blast radius`));
+    suspected.length === 0 ? 'none' : `${suspected.length} amber · derived from blast radius`, 'risk'));
   if (suspected.length === 0) app.appendChild(empty('(none)'));
   else suspected.forEach(c => app.appendChild(claimCard(c, 'risk')));
 
-  // CLAIMS · HOLDING (compact list)
+  // CLAIMS · HOLDING (compact list) — visible by default, matches example.html
   const holding = claims.filter(c => c.status === 'holding');
   app.appendChild(sectionHeader('CLAIMS · HOLDING (REFERENCE)',
     holding.length === 0 ? 'none' : `${holding.length} with positive evidence · click any to expand`));
@@ -232,9 +242,9 @@ function render(s) {
   });
 }
 
-function sectionHeader(title, count) {
+function sectionHeader(title, count, sev) {
   const h = document.createElement('div');
-  h.className = 'section-header';
+  h.className = 'section-header' + (sev ? ' sev-' + sev : '');
   h.innerHTML = `<div class="section-title">${escapeHTML(title)}</div><div class="section-count">${escapeHTML(count)}</div>`;
   return h;
 }
@@ -270,7 +280,15 @@ function claimCard(c, statusClass) {
 
 // ===== Delta cards (recent iterations) =====
 function deltaCard(it) {
-  const meta = `iter #${it.id} · ${relTime(it.ts)}`;
+  const files = it.files_changed || [];
+  // Surface file count + first two basenames at L0 so the programmer's PR-review
+  // muscle memory ("which files?") is answered without expanding.
+  let fileHint = '';
+  if (files.length > 0) {
+    const names = files.slice(0, 2).map(f => f.split('/').pop());
+    fileHint = ` · ${files.length} file${files.length === 1 ? '' : 's'}: ${names.join(', ')}${files.length > 2 ? '…' : ''}`;
+  }
+  const meta = `iter #${it.id} · ${relTime(it.ts)}${fileHint}`;
   // L2: WHY prose + claim-effects evidence list
   let claimsEv = [];
   (it.claims_added || []).forEach(cid => claimsEv.push({type: 'doc', path: 'claims#' + cid, note: 'CLAIM ADDED'}));
@@ -314,14 +332,16 @@ function commitCard(it) {
   const sha = it.sha || '';
   const shortSHA = sha.slice(0, 7);
   const meta = `commit · ${shortSHA} · ${relTime(it.ts)}`;
+  // Use a graphic icon (◉) instead of the SHA so the 22px icon column doesn't
+  // overflow into the head column. The SHA lives in card-meta where there's room.
   const L2 = `<span class="why-label">WHY</span>` +
-    `<span class="why-text" data-commit-body="${escapeHTML(sha)}">${renderEmphasis(it.summary || '')}</span>`;
+    `<p class="why-text" data-commit-body="${escapeHTML(sha)}">${renderEmphasis(it.summary || '')}</p>`;
   const L3 = `<span class="why-label">DIFF · PER FILE</span>` +
     `<div class="diff-files" data-diff-sha="${escapeHTML(sha)}">` +
     `<div class="diff"><div class="diff-head">expand to load · ${escapeHTML(shortSHA)}</div></div>` +
     `</div>`;
   return buildCard({
-    statusClass: 'delta', cardID: 'commit-' + sha, icon: shortSHA,
+    statusClass: 'delta', cardID: 'commit-' + sha, icon: '◉',
     head: it.summary || '(commit)', metaText: meta, initialDepth: 0,
     L2, L3, L4: null,
   });
@@ -468,10 +488,11 @@ function buildCard({statusClass, cardID, icon, head, metaText, L2, L3, L4, initi
   return card;
 }
 
-// whyBlock = WHY label + prose body + evidence box (matches example.html L761-769 pattern)
-function whyBlock(label, prose, evidence) {
-  let html = `<span class="why-label">${escapeHTML(label)}</span>`;
-  if (prose) html += `<span class="why-text">${renderEmphasis(prose)}</span>`;
+// whyBlock = WHY label + evidence box.
+// (Mockup pattern from example.html L761-769. We don't have separate narrative
+// data, so the previous "prose" arg just repeated the head — removed.)
+function whyBlock(label, _unused, evidence) {
+  let html = `<div class="why-label">${escapeHTML(label)}</div>`;
   if (evidence && evidence.length) {
     html += `<div class="evidence">`;
     evidence.forEach(ev => {
@@ -589,16 +610,9 @@ function renderTimeline(iters) {
       railTitle.textContent = 'ITERATIONS';
     }
   }
-  // SINCE LAST SYNC amber band over the most-recent unack'd iterations
-  // (Phase 4 will tie this to .sync/local/ack.json — for now, cover top 3.)
-  if (sorted.length >= 1) {
-    const band = document.createElement('div');
-    band.className = 'vtl-band';
-    band.style.top = '0';
-    band.style.height = (Math.min(3, sorted.length) * 32) + 'px';
-    band.innerHTML = `<div class="vtl-band-label">SINCE LAST SYNC</div>`;
-    tl.appendChild(band);
-  }
+  // Render items first; then measure and place the SINCE LAST SYNC band over
+  // the top N (currently top 3 — Phase 4 will read .sync/local/ack.json).
+  const bandCount = Math.min(3, sorted.length);
   sorted.forEach((it, i) => {
     const item = document.createElement('div');
     let klass = 'vtl-item';
@@ -609,13 +623,31 @@ function renderTimeline(iters) {
     item.dataset.kind = it.kind;
     if (it.kind === 'commit') {
       item.dataset.sha = it.sha || '';
-      item.innerHTML = `${escapeHTML(it.sha?.slice(0, 7) || '?')}<div class="vtl-sha">${escapeHTML(truncate(it.summary || '', 36))} · ${relTime(it.ts)}</div>`;
+      item.innerHTML = `${escapeHTML(it.sha?.slice(0, 7) || '?')}<div class="vtl-sha">${escapeHTML(truncate(it.summary || '', 32))}</div><div class="vtl-when">${relTime(it.ts)}</div>`;
     } else {
       item.dataset.iterId = String(it.id);
       item.innerHTML = `iter #${it.id} · ${escapeHTML(truncate(it.summary || '', 36))}<div class="vtl-when">${relTime(it.ts)}${i === 0 ? ' · active' : ''}</div>`;
     }
     tl.appendChild(item);
   });
+  // Measure actual item heights and place the SINCE LAST SYNC band BEHIND the
+  // first N items. Insert the band as the FIRST child of .vtl so the items
+  // (later siblings) render on top of it.
+  if (bandCount > 0) {
+    const items = tl.querySelectorAll('.vtl-item');
+    if (items.length) {
+      const first = items[0];
+      const last = items[bandCount - 1];
+      const top = first.offsetTop;
+      const bottom = last.offsetTop + last.offsetHeight;
+      const band = document.createElement('div');
+      band.className = 'vtl-band';
+      band.style.top = (top - 4) + 'px';
+      band.style.height = (bottom - top + 8) + 'px';
+      band.innerHTML = `<div class="vtl-band-label">SINCE LAST SYNC</div>`;
+      tl.insertBefore(band, tl.firstChild);
+    }
+  }
 }
 
 function scrollToCard(cardID, expandToDepth = 0) {
@@ -642,8 +674,9 @@ function handleDepthCmd(cmd) {
     const target = [...document.querySelectorAll('.section-title')].find(t => t.textContent.includes('AT RISK'));
     target?.closest('.section-header')?.scrollIntoView({behavior: 'smooth', block: 'start'});
   } else if (cmd === 'why') {
-    const target = [...document.querySelectorAll('.section-title')].find(t => t.textContent.includes('DELTAS'));
-    target?.closest('.section-header')?.scrollIntoView({behavior: 'smooth', block: 'start'});
+    // Open the most recent delta's WHY (L2), not just scroll to the section.
+    const firstDelta = document.querySelector('.card.status-delta[data-card-id]');
+    if (firstDelta) scrollToCard(firstDelta.dataset.cardId, 2);
   } else if (cmd === 'model') {
     alert('?model not in v1 — Phase 6 will surface architecture from CONTEXT.md / ADRs.');
   }
