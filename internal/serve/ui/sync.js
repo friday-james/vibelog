@@ -306,16 +306,20 @@ function deltaCard(it) {
 }
 
 // ===== Commit cards =====
-// Render git commits as status-delta cards in DELTAS. L3 lazy-loads the diff
-// from /git/show/<sha> and renders inline using the .diff block primitive.
+// L1: shortSHA + commit subject
+// L2: WHY — lazy-loaded commit message body (the explanation layer)
+// L3: DIFF — one .diff block per file
+// Both L2 and L3 are populated by a single /git/show fetch (loadCommitDetails).
 function commitCard(it) {
   const sha = it.sha || '';
   const shortSHA = sha.slice(0, 7);
   const meta = `commit · ${shortSHA} · ${relTime(it.ts)}`;
-  const L2 = `<span class="why-label">WHY</span><span class="why-text">${renderEmphasis(it.summary || '')}</span>`;
-  // L3 placeholder — replaced with diff text on first expansion to depth ≥ 2.
-  const L3 = `<span class="why-label">DIFF</span>` +
-    `<div class="diff" data-diff-sha="${escapeHTML(sha)}"><div class="diff-head">${escapeHTML(shortSHA)} — click "show more" to load</div><pre><span class="ctx">(diff not yet loaded)</span></pre></div>`;
+  const L2 = `<span class="why-label">WHY</span>` +
+    `<span class="why-text" data-commit-body="${escapeHTML(sha)}">${renderEmphasis(it.summary || '')}</span>`;
+  const L3 = `<span class="why-label">DIFF · PER FILE</span>` +
+    `<div class="diff-files" data-diff-sha="${escapeHTML(sha)}">` +
+    `<div class="diff"><div class="diff-head">expand to load · ${escapeHTML(shortSHA)}</div></div>` +
+    `</div>`;
   return buildCard({
     statusClass: 'delta', cardID: 'commit-' + sha, icon: shortSHA,
     head: it.summary || '(commit)', metaText: meta, initialDepth: 0,
@@ -323,29 +327,94 @@ function commitCard(it) {
   });
 }
 
-// Fetch and render the diff into a card's L3 .diff element. Called when a
-// commit card first reaches depth ≥ 2.
-async function loadCommitDiff(card) {
-  const diffEl = card.querySelector('.diff[data-diff-sha]');
-  if (!diffEl) return;
-  const sha = diffEl.dataset.diffSha;
-  if (!sha || diffEl.dataset.loaded === '1') return;
-  diffEl.dataset.loaded = '1';
-  diffEl.innerHTML = `<div class="diff-head">${escapeHTML(sha.slice(0, 7))} · loading…</div>`;
+// Lazy-load commit body (L2) and per-file diff blocks (L3) from a single
+// /git/show fetch. Called when a commit card first reaches depth ≥ 1.
+async function loadCommitDetails(card) {
+  const container = card.querySelector('.diff-files[data-diff-sha]');
+  if (!container || container.dataset.loaded === '1') return;
+  container.dataset.loaded = '1';
+  const sha = container.dataset.diffSha;
+  container.innerHTML = `<div class="diff"><div class="diff-head">${escapeHTML(sha.slice(0, 7))} · loading…</div></div>`;
   try {
     const r = await fetch('/git/show/' + encodeURIComponent(sha));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const text = await r.text();
-    diffEl.innerHTML = '';
-    const head = document.createElement('div');
-    head.className = 'diff-head';
-    head.textContent = `${sha.slice(0, 7)} · git show`;
-    diffEl.appendChild(head);
-    diffEl.appendChild(formatDiffText(text));
+    const parsed = parseGitShow(text);
+
+    // L2: replace the placeholder body with the parsed commit message body.
+    const bodyEl = card.querySelector(`.why-text[data-commit-body]`);
+    if (bodyEl && parsed.body) bodyEl.innerHTML = renderEmphasis(parsed.body);
+
+    // L3: one .diff block per file.
+    container.innerHTML = '';
+    if (parsed.files.length === 0) {
+      container.innerHTML = `<div class="diff"><div class="diff-head">no file changes</div></div>`;
+      return;
+    }
+    parsed.files.forEach(f => {
+      const block = document.createElement('div');
+      block.className = 'diff';
+      const head = document.createElement('div');
+      head.className = 'diff-head';
+      head.textContent = f.path;
+      block.appendChild(head);
+      block.appendChild(formatDiffLines(f.lines));
+      container.appendChild(block);
+    });
   } catch (e) {
-    diffEl.innerHTML = `<div class="diff-head">error</div><pre><span class="del">${escapeHTML(String(e))}</span></pre>`;
-    diffEl.dataset.loaded = '0';
+    container.innerHTML = `<div class="diff"><div class="diff-head">error</div><pre><span class="del">${escapeHTML(String(e))}</span></pre></div>`;
+    container.dataset.loaded = '0';
   }
+}
+
+// Parse `git show` output into {body, files: [{path, lines[]}]}.
+// The body is the commit message between the Date: line and the first
+// `diff --git` boundary (mockup-style indentation: 4 spaces, stripped).
+function parseGitShow(text) {
+  const lines = text.split('\n');
+  let body = '';
+  const files = [];
+  let i = 0;
+  let afterDate = false;
+  for (; i < lines.length; i++) {
+    if (lines[i].startsWith('Date:')) { afterDate = true; continue; }
+    if (lines[i].startsWith('diff --git')) break;
+    if (afterDate) {
+      if (lines[i].startsWith('    ')) body += lines[i].slice(4) + '\n';
+      else if (body && lines[i].trim() === '') body += '\n';
+    }
+  }
+  body = body.trim();
+  // Per-file split on `diff --git` boundaries
+  let cur = null;
+  for (; i < lines.length; i++) {
+    if (lines[i].startsWith('diff --git')) {
+      if (cur) files.push(cur);
+      const m = lines[i].match(/diff --git a\/(\S+) b\//);
+      cur = { path: m ? m[1] : '(unknown)', lines: [] };
+      continue; // header line itself is replaced by .diff-head; don't include in body
+    }
+    if (cur) cur.lines.push(lines[i]);
+  }
+  if (cur) files.push(cur);
+  return { body, files };
+}
+
+// Render an array of diff lines into a colored <pre>.
+function formatDiffLines(lines) {
+  const pre = document.createElement('pre');
+  lines.forEach(line => {
+    const span = document.createElement('span');
+    span.textContent = line + '\n';
+    if (line.startsWith('+++') || line.startsWith('---')) span.className = 'diff-file';
+    else if (line.startsWith('@@')) span.className = 'diff-hunk';
+    else if (line.startsWith('+')) span.className = 'add';
+    else if (line.startsWith('-')) span.className = 'del';
+    else if (line.startsWith('index ') || line.startsWith('new file') || line.startsWith('deleted file') || line.startsWith('similarity')) span.className = 'diff-meta';
+    else span.className = 'ctx';
+    pre.appendChild(span);
+  });
+  return pre;
 }
 
 function buildCard({statusClass, cardID, icon, head, metaText, L2, L3, L4, initialDepth}) {
@@ -549,29 +618,13 @@ function renderTimeline(iters) {
   });
 }
 
-function formatDiffText(text) {
-  const pre = document.createElement('pre');
-  text.split('\n').forEach(line => {
-    const span = document.createElement('span');
-    span.textContent = line + '\n';
-    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ')) span.className = 'diff-file';
-    else if (line.startsWith('@@')) span.className = 'diff-hunk';
-    else if (line.startsWith('+')) span.className = 'add';
-    else if (line.startsWith('-')) span.className = 'del';
-    else if (line.startsWith('commit ') || line.startsWith('Author:') || line.startsWith('Date:')) span.className = 'diff-meta';
-    else span.className = 'ctx';
-    pre.appendChild(span);
-  });
-  return pre;
-}
-
 function scrollToCard(cardID, expandToDepth = 0) {
   const card = document.querySelector(`.card[data-card-id="${cardID}"]`);
   if (!card) return false;
   if (expandToDepth > 0) {
     card.dataset.depth = String(expandToDepth);
     depthMemory[cardID] = String(expandToDepth);
-    if (cardID.startsWith('commit-')) loadCommitDiff(card);
+    if (cardID.startsWith('commit-')) loadCommitDetails(card);
   }
   card.scrollIntoView({behavior: 'smooth', block: 'center'});
   card.classList.add('flash');
@@ -671,7 +724,9 @@ document.addEventListener('click', e => {
       const newDepth = d + 1;
       card.dataset.depth = String(newDepth);
       if (id) depthMemory[id] = String(newDepth);
-      if (newDepth >= 2 && id?.startsWith('commit-')) loadCommitDiff(card);
+      // Commit cards: trigger lazy-load at L1 so the explanation appears
+      // as soon as the user expands (before they reach the diff at L3).
+      if (newDepth >= 1 && id?.startsWith('commit-')) loadCommitDetails(card);
     }
     return;
   }
@@ -682,7 +737,7 @@ document.addEventListener('click', e => {
     const newDepth = d < 3 ? d + 1 : 0;
     card.dataset.depth = String(newDepth);
     if (id) depthMemory[id] = String(newDepth);
-    if (newDepth >= 2 && id?.startsWith('commit-')) loadCommitDiff(card);
+    if (newDepth >= 1 && id?.startsWith('commit-')) loadCommitDetails(card);
   }
 });
 

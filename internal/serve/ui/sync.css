@@ -205,7 +205,7 @@ body::before {
 .vtl-item.commit:hover { color: var(--amber-bright); }
 .vtl-item[data-kind="iteration"] { cursor: pointer; }
 .vtl-item.commit .vtl-sha { font-size: 9.5px; color: var(--text-3); margin-top: 1px; }
-/* Additional diff classifiers used by formatDiffText inside card-l3 .diff blocks */
+/* Additional diff classifiers used by formatDiffLines inside card-l3 .diff blocks */
 .diff .diff-file { color: var(--text-2); display: block; }
 .diff .diff-hunk { color: var(--amber); display: block; }
 .diff .diff-meta { color: var(--text-3); display: block; }
@@ -388,12 +388,14 @@ body::before {
 .compact-item .ci-evi { color: var(--text-3); font-size: 9.5px; }
 
 /* DIFF blocks inside card-l3 (in deltas, violated, etc.) */
+.diff-files { display: flex; flex-direction: column; gap: 10px; }
 .diff {
   background: var(--bg);
   border: 1px solid var(--border-soft);
   border-radius: 3px;
   font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6;
   overflow: auto;
+  max-height: 360px;
 }
 .diff-head {
   padding: 5px 12px;
