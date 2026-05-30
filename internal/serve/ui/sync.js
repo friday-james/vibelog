@@ -18,18 +18,24 @@ const STATUS_ICONS = {
 
 const depthMemory = {};
 let lastStateHash = null;
+let currentState = null;
+// Multi-session UI state, recomputed per render() and consumed by deltaCard().
+// sessionPalette: { sessionId → cssColor } when ≥2 distinct sessions exist; null otherwise.
+// concurrencyIndex: { iterId → { overwrites: [files], crossSessions: [{file, session}] } }
+let sessionPalette = null;
+let concurrencyIndex = {};
 
 async function load() {
   try {
     const r = await fetch('/state.json');
     if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
     const s = await r.json();
+    currentState = s;
     const hash = quickHash(s);
     if (hash !== lastStateHash) {
       render(s);
       lastStateHash = hash;
     }
-    updateVelocity(s);
     setStatus('synced', syncStateText(s));
   } catch (e) {
     showError(e.message || String(e));
@@ -52,16 +58,18 @@ function nowHHMM() {
 }
 
 function syncStateText(s) {
-  const iters = s.iterations || [];
-  if (iters.length === 0) return 'no iterations yet';
+  // Match the PROMPTS section count: only kind === 'iteration' entries.
+  // Old entries with other kinds (e.g. commits) bloated the header number
+  // and produced a mismatch with the section header.
+  const iters = (s.iterations || []).filter(it => it.kind === 'iteration');
+  if (iters.length === 0) return 'no prompts yet';
   const last = iters[iters.length - 1];
-  return `${iters.length} iterations · last ${relTime(last.ts)}`;
+  return `${iters.length} prompt${iters.length === 1 ? '' : 's'} · last ${relTime(last.ts)}`;
 }
 
 function setStatus(state, text) {
-  document.getElementById('status').textContent = text;
-  const dot = document.getElementById('syncDot');
-  if (dot) dot.classList.toggle('synced', state === 'synced');
+  const el = document.getElementById('status');
+  if (el) el.textContent = text;
 }
 
 function showError(msg) {
@@ -69,36 +77,7 @@ function showError(msg) {
   setStatus('error', 'error');
 }
 
-// ===== VELOCITY (header AGENT/YOU bars) =====
-// agent rate = iterations/min in last 5min; human rate = currently mocked to 0
-// (we don't track ack events yet — Phase 4).
-function updateVelocity(s) {
-  const iters = (s.iterations || []).filter(it => it.kind === 'iteration');
-  const windowMs = 5 * 60 * 1000;
-  const cutoff = Date.now() - windowMs;
-  const recent = iters.filter(it => new Date(it.ts).getTime() >= cutoff);
-  const agentPerMin = recent.length / 5;
-  const humanPerMin = 0;
-
-  // Cap the bar at 4 iter/min visually; that's where it saturates.
-  const agentPct = Math.min(100, (agentPerMin / 4) * 100);
-  const humanPct = Math.min(100, (humanPerMin / 4) * 100);
-
-  document.getElementById('vbarAgent').style.width = agentPct + '%';
-  document.getElementById('vbarHuman').style.width = humanPct + '%';
-  document.getElementById('vvalAgent').textContent = fmtRate(agentPerMin);
-  document.getElementById('vvalHuman').textContent = fmtRate(humanPerMin);
-
-  // DRIFT: only meaningful once we track human acks (Phase 4). Until then,
-  // a permanently-active pulse is salience pollution. Stay quiet.
-  document.getElementById('vdrift').classList.toggle('active', false);
-}
-
-function fmtRate(r) {
-  if (r === 0) return '0/min';
-  if (r < 0.1) return r.toFixed(2) + '/min';
-  return r.toFixed(1) + '/min';
-}
+// (Velocity meter removed — was not actionable without ack tracking.)
 
 // ===== Card-head emphasis: backticks → <code>, *stars* → <em> =====
 // Allows claim/anchor statements like "POST /magic-link rate-limit on `gateway`"
@@ -165,81 +144,41 @@ function render(s) {
   const app = document.getElementById('app');
   app.innerHTML = '';
 
-  // STATUS BANNER — single-glance answer to "is anything broken?"
-  // Deviation from example.html: justified because the mockup pushes VIOLATED
-  // below the fold at common laptop viewports (1440x900).
-  const claims = s.claims || [];
-  const violated = claims.filter(c => c.status === 'violated');
-  const suspected = claims.filter(c => c.status === 'suspected');
-  const holding = claims.filter(c => c.status === 'holding');
+  // v1 dashboard is prompts-only. Status banner, ANCHOR, CLAIMS sections,
+  // and BLAST RADIUS are stripped for simplicity — their designs are saved
+  // in /Users/jai/.claude/projects/-Users-jai-Documents-ai-cockpit/memory/
+  // for revisit after the next compacted session.
   const allIters = s.iterations || [];
-  const recent = allIters.slice().sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, 5);
-  app.appendChild(statusBanner(violated.length, suspected.length, holding.length, recent.length));
+  // Prompts feed = iteration + external_edit, single linear timeline.
+  const feed = allIters
+    .filter(it => it.kind === 'iteration' || it.kind === 'external_edit')
+    .slice()
+    .sort((a, b) => new Date(b.ts) - new Date(a.ts));
 
-  // ANCHOR — "now" first (the urgent question), then approach, then intent.
-  // Deviation: mockup orders intent/approach/now top-to-bottom; we invert
-  // because "what is the agent doing right now?" is the most temporally
-  // urgent question for the dashboard's primary use case.
-  const latestIter = allIters.slice().reverse().find(it => it.kind === 'iteration');
-  const nowEvidence = [];
-  if (latestIter?.files_changed?.length) {
-    latestIter.files_changed.slice(0, 6).forEach(f => {
-      nowEvidence.push({ type: 'code', path: f, polarity: 'positive', note: `touched in iter #${latestIter.id}` });
+  // Session palette only when ≥2 distinct (non-external) sessions are
+  // present — keeps the single-session view uncluttered.
+  const sessions = new Set(feed
+    .filter(it => it.kind === 'iteration')
+    .map(it => it.session_id)
+    .filter(x => x));
+  sessionPalette = sessions.size >= 2 ? buildSessionPalette([...sessions]) : null;
+
+  // Concurrency index: iter id → list of other session_ids that touched any
+  // of the same files within CONCURRENCY_WINDOW_MS.
+  concurrencyIndex = buildConcurrencyIndex(feed);
+
+  // No count here — the header sync-state already reports "X prompts · last …".
+  app.appendChild(sectionHeader('PROMPTS · WHAT THE AGENT DID', ''));
+  if (feed.length === 0) {
+    app.appendChild(empty('(no prompts yet)'));
+  } else {
+    feed.forEach(it => {
+      // Drop external_edit cards from the main feed — they're history-only
+      // now; live drift lives in the leading card above.
+      if (it.kind === 'external_edit') return;
+      app.appendChild(deltaCard(it));
     });
   }
-  app.appendChild(sectionHeader('ANCHOR · WHAT YOU\'RE BUILDING', 'click any to expand'));
-  app.appendChild(anchorCard('editing', 'anchor-now', '▸',
-    s.anchor.now.statement, nowMeta(s.anchor.now), { evidence: nowEvidence }, 1));
-  app.appendChild(anchorCard('anchor', 'anchor-approach', '02',
-    s.anchor.approach.statement, approachMeta(s.anchor.approach), s.anchor.approach));
-  app.appendChild(anchorCard('anchor', 'anchor-intent', '01',
-    s.anchor.intent.statement, intentMeta(s.anchor.intent), s.anchor.intent));
-
-  // DELTAS — 5 most recent entries (iterations + commits interleaved by ts).
-  // `recent` was computed above for the status banner.
-  app.appendChild(sectionHeader('DELTAS · WHAT CHANGED SINCE YOU LAST LOOKED',
-    recent.length ? `${recent.length} unack'd · 0 ack'd` : 'none'));
-  if (recent.length === 0) {
-    app.appendChild(empty('(no iterations yet)'));
-  } else {
-    recent.forEach(it => {
-      app.appendChild(it.kind === 'commit' ? commitCard(it) : deltaCard(it));
-    });
-  }
-
-  // CLAIMS · VIOLATED (variables computed at top of render for banner)
-  app.appendChild(sectionHeader('CLAIMS · VIOLATED',
-    violated.length === 0 ? 'none' : `${violated.length} violated · hard stop before merge`, 'violated'));
-  if (violated.length === 0) app.appendChild(empty('(none)'));
-  else violated.forEach(c => app.appendChild(claimCard(c, 'violated')));
-
-  // CLAIMS · AT RISK FROM THIS EDIT
-  app.appendChild(sectionHeader('CLAIMS · AT RISK FROM THIS EDIT',
-    suspected.length === 0 ? 'none' : `${suspected.length} amber · derived from blast radius`, 'risk'));
-  if (suspected.length === 0) app.appendChild(empty('(none)'));
-  else suspected.forEach(c => app.appendChild(claimCard(c, 'risk')));
-
-  // CLAIMS · HOLDING — collapsible (deviation from mockup: at 40 claims the
-  // mockup's always-expanded list dominates the fold; collapse keeps L0 light)
-  app.appendChild(sectionHeader('CLAIMS · HOLDING (REFERENCE)',
-    holding.length === 0 ? 'none' : `${holding.length} with positive evidence`, 'holding'));
-  if (holding.length === 0) {
-    app.appendChild(empty('(none)'));
-  } else {
-    const details = document.createElement('details');
-    details.className = 'section-collapsible';
-    const summary = document.createElement('summary');
-    summary.textContent = `expand ${holding.length} holding claim${holding.length === 1 ? '' : 's'}`;
-    details.appendChild(summary);
-    const grid = document.createElement('div');
-    grid.className = 'compact-list';
-    holding.forEach(c => grid.appendChild(compactItem(c)));
-    details.appendChild(grid);
-    app.appendChild(details);
-  }
-
-  // BLAST RADIUS · what this edit touches
-  renderBlastRadius(app, allIters);
 
   // Rail timeline
   renderTimeline(allIters);
@@ -266,7 +205,7 @@ function statusBanner(violatedN, riskN, holdingN, deltaN) {
   wrap.appendChild(chip('sev-violated', 'VIOLATED', violatedN, 'violated'));
   wrap.appendChild(chip('sev-risk',     'AT RISK',  riskN,     'at risk'));
   wrap.appendChild(chip('sev-holding',  'HOLDING',  holdingN,  'holding'));
-  wrap.appendChild(chip('sev-delta',    'DELTAS',   deltaN,    'deltas'));
+  wrap.appendChild(chip('sev-delta',    'PROMPTS',  deltaN,    'prompts'));
   return wrap;
 }
 
@@ -306,221 +245,286 @@ function claimCard(c, statusClass) {
   });
 }
 
-// ===== Delta cards (recent iterations) =====
+// ===== Prompt cards =====
+// L0: head (user prompt) + subtitle (assistant's last text block, clamped).
+// L1: IMPLEMENTATION — the agent's full teach-back (every text block joined).
+// L2: TOUCHED — clean file list (concrete data).
+// L3: DIFFS — per-file prompt-to-prompt diffs (lazy-loaded).
+// buildSessionPalette: stable hash-based mapping session_id → color. The
+// palette is small (5 entries) and the choice is deterministic per id so it
+// stays consistent across renders. Only invoked when ≥2 distinct sessions
+// are present, so the chip never appears in single-session usage.
+const SESSION_COLORS = ['#d4a14a', '#6c93b3', '#7aa86e', '#c46a52', '#b56cb3'];
+function buildSessionPalette(sessionIds) {
+  const map = {};
+  for (const sid of sessionIds) {
+    let h = 0;
+    for (let i = 0; i < sid.length; i++) h = ((h << 5) - h + sid.charCodeAt(i)) | 0;
+    map[sid] = SESSION_COLORS[Math.abs(h) % SESSION_COLORS.length];
+  }
+  return map;
+}
+function shortSession(sid) {
+  if (!sid) return '';
+  return sid.slice(0, 4);
+}
+
+// buildConcurrencyIndex: O(n) walk of the feed (oldest → newest) maintaining
+// a per-file "last touch" record. For each iter, classify each touched file:
+//   prior is external_edit → record under `overwrites` (highest urgency)
+//   prior is a different session → record under `crossSessions`
+//   same session OR no prior → no badge
+// Result is keyed by iter id for cheap lookup in deltaCard.
+function buildConcurrencyIndex(feed) {
+  const oldFirst = [...feed].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+  const lastTouch = {}; // file → { id, session_id, kind }
+  const result = {};
+  for (const it of oldFirst) {
+    const files = it.files_changed || [];
+    if (it.kind === 'iteration') {
+      const overwrites = [];
+      const crossSessions = [];
+      const priorByFile = {}; // for click-jump: file → prior iter id
+      for (const f of files) {
+        const prior = lastTouch[f];
+        if (prior) {
+          if (prior.kind === 'external_edit') {
+            overwrites.push(f);
+            priorByFile[f] = prior.id;
+          } else if (prior.session_id && prior.session_id !== it.session_id) {
+            crossSessions.push({ file: f, session: prior.session_id });
+            priorByFile[f] = prior.id;
+          }
+        }
+      }
+      if (overwrites.length || crossSessions.length) {
+        result[it.id] = { overwrites, crossSessions, priorByFile };
+      }
+    }
+    // Update lastTouch for both iteration AND external_edit kinds — the next
+    // iter touching this file should see whichever was most recent.
+    for (const f of files) {
+      lastTouch[f] = { id: it.id, session_id: it.session_id, kind: it.kind };
+    }
+  }
+  return result;
+}
+
+// externalEditCard renders the synthetic row for an off-prompt file change.
+// Expandable so clicking the card (or a click-jump from another card's
+// badge) reveals the diff of what changed off-prompt.
+function externalEditCard(it) {
+  const files = it.files_changed || [];
+  const head = files.length === 1
+    ? `external edit on \`${files[0]}\``
+    : `external edit on ${files.length} files`;
+  const layers = [{
+    label: 'show diff',
+    html: `<div class="why-label">DIFFS · what changed off-prompt</div>` +
+      `<div class="diff-files">` +
+      files.map(f =>
+        `<details class="file-diff" open><summary><code>${escapeHTML(f)}</code></summary>` +
+        `<div class="diff" data-iter-id="${it.id}" data-file-path="${escapeHTML(f)}"><div class="diff-head">loading…</div></div>` +
+        `</details>`
+      ).join('') +
+      `</div>`,
+  }];
+  return buildCard({
+    statusClass: 'external-edit', cardID: 'ext-' + it.id, icon: '',
+    head, subtitle: 'off-prompt change — not produced by an agent in this project',
+    metaTsISO: it.ts, metaSuffix: '',
+    initialDepth: 0, layers,
+  });
+}
+
 function deltaCard(it) {
   const files = it.files_changed || [];
-  // Surface file count + first two basenames at L0 so the programmer's PR-review
-  // muscle memory ("which files?") is answered without expanding.
-  let fileHint = '';
-  if (files.length > 0) {
-    const names = files.slice(0, 2).map(f => f.split('/').pop());
-    fileHint = ` · ${files.length} file${files.length === 1 ? '' : 's'}: ${names.join(', ')}${files.length > 2 ? '…' : ''}`;
-  }
-  const meta = `iter #${it.id} · ${relTime(it.ts)}${fileHint}`;
-  // L2: WHY prose + claim-effects evidence list
-  let claimsEv = [];
-  (it.claims_added || []).forEach(cid => claimsEv.push({type: 'doc', path: 'claims#' + cid, note: 'CLAIM ADDED'}));
-  (it.claims_violated || []).forEach(cid => claimsEv.push({type: 'missing', kind: 'verification', note: 'CLAIM VIOLATED: ' + cid}));
-  const L2 = whyBlock('WHY', it.summary || '', claimsEv);
-
-  // L3: stand-in for DIFF — files touched as a list (we don't store diff text)
-  let L3 = null;
-  if (it.files_changed?.length) {
-    L3 = `<span class="why-label">DIFF · FILES TOUCHED</span>` +
-      `<div class="diff"><div class="diff-head">iter #${it.id}</div><pre>` +
-      it.files_changed.map(f => `<span class="ctx">${escapeHTML(f)}</span>`).join('') +
-      `</pre></div>`;
-  }
-
-  // L4: propagation (claims affected by this iteration)
-  let L4 = null;
-  if (it.claims_added?.length || it.claims_violated?.length) {
-    const items = [
-      ...(it.claims_added || []).map(c => ({dir: 'down', text: c, label: 'added'})),
-      ...(it.claims_violated || []).map(c => ({dir: 'risk', text: c, label: 'violated'})),
-    ];
-    L4 = `<span class="why-label">PROPAGATION</span><ul class="prop-list">` +
-      items.map(i => `<li><span class="prop-dir ${i.dir}">${i.label}</span>${escapeHTML(i.text)}</li>`).join('') +
-      `</ul>`;
-  }
-
-  return buildCard({
-    statusClass: 'delta', cardID: 'iter-' + it.id, icon: 'Δ',
-    head: it.summary || '(no summary)', metaText: meta, initialDepth: 0,
-    L2, L3, L4,
-  });
-}
-
-// ===== Commit cards =====
-// L1: shortSHA + commit subject
-// L2: WHY — lazy-loaded commit message body (the explanation layer)
-// L3: DIFF — one .diff block per file
-// Both L2 and L3 are populated by a single /git/show fetch (loadCommitDetails).
-function commitCard(it) {
-  const sha = it.sha || '';
-  const shortSHA = sha.slice(0, 7);
-  const meta = `commit · ${shortSHA} · ${relTime(it.ts)}`;
-  // Use a graphic icon (◉) instead of the SHA so the 22px icon column doesn't
-  // overflow into the head column. The SHA lives in card-meta where there's room.
-  const L2 = `<span class="why-label">WHY</span>` +
-    `<p class="why-text" data-commit-body="${escapeHTML(sha)}">${renderEmphasis(it.summary || '')}</p>`;
-  const L3 = `<span class="why-label">DIFF · PER FILE</span>` +
-    `<div class="diff-files" data-diff-sha="${escapeHTML(sha)}">` +
-    `<div class="diff"><div class="diff-head">expand to load · ${escapeHTML(shortSHA)}</div></div>` +
-    `</div>`;
-  return buildCard({
-    statusClass: 'delta', cardID: 'commit-' + sha, icon: '◉',
-    head: it.summary || '(commit)', metaText: meta, initialDepth: 0,
-    L2, L3, L4: null,
-  });
-}
-
-// Lazy-load commit body (L2) and per-file diff blocks (L3) from a single
-// /git/show fetch. Called when a commit card first reaches depth ≥ 1.
-async function loadCommitDetails(card) {
-  const container = card.querySelector('.diff-files[data-diff-sha]');
-  if (!container || container.dataset.loaded === '1') return;
-  container.dataset.loaded = '1';
-  const sha = container.dataset.diffSha;
-  container.innerHTML = `<div class="diff"><div class="diff-head">${escapeHTML(sha.slice(0, 7))} · loading…</div></div>`;
-  try {
-    const r = await fetch('/git/show/' + encodeURIComponent(sha));
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const text = await r.text();
-    const parsed = parseGitShow(text);
-
-    // L2: replace the placeholder body with the parsed commit message body.
-    const bodyEl = card.querySelector(`.why-text[data-commit-body]`);
-    if (bodyEl && parsed.body) bodyEl.innerHTML = renderEmphasis(parsed.body);
-
-    // L3: one .diff block per file.
-    container.innerHTML = '';
-    if (parsed.files.length === 0) {
-      container.innerHTML = `<div class="diff"><div class="diff-head">no file changes</div></div>`;
-      return;
+  const head = it.user_prompt && it.user_prompt.trim() ? it.user_prompt : (it.summary || '(no prompt captured)');
+  const implRaw = (it.implementation || '').trim();
+  const summaryRaw = (it.summary || '').trim();
+  // L0 subtitle = the agent-submitted summary (via MCP). If only the
+  // auto-generated placeholder ("no action" / "(no teach-back submitted)") is
+  // present, suppress so the card stays clean.
+  const isPlaceholder = /^(no action|\(no teach-back submitted\))$/.test(summaryRaw);
+  // Subtitle priority: envelope summary (when meaningful) → first line of
+  // response text (when only the heuristic is present, e.g. pure Q&A turns
+  // where the agent didn't call set_implementation). Either way, the L0
+  // card carries a one-line hint of what the turn was about.
+  let subtitle = null;
+  if (it.user_prompt) {
+    if (summaryRaw && !isPlaceholder) {
+      subtitle = summaryRaw;
+    } else if (implRaw) {
+      subtitle = deriveSubtitleFromImpl(implRaw);
     }
-    parsed.files.forEach(f => {
-      const block = document.createElement('div');
-      block.className = 'diff';
-      const head = document.createElement('div');
-      head.className = 'diff-head';
-      head.textContent = f.path;
-      block.appendChild(head);
-      block.appendChild(formatDiffLines(f.lines));
-      container.appendChild(block);
+  }
+  const fileHint = files.length > 0 ? ` · ${files.length} file${files.length === 1 ? '' : 's'}` : '';
+
+  // Build the reveal layers in order. Pure-conversation turns get a RESPONSE
+  // layer (renamed from IMPLEMENTATION since the wording would mislead). File-
+  // touching turns get IMPLEMENTATION + touched + diffs.
+  const layers = [];
+  const hasFiles = files.length > 0;
+  if (implRaw) {
+    layers.push({
+      label: hasFiles ? 'show implementation' : 'show response',
+      html: `<div class="why-label">${hasFiles ? 'IMPLEMENTATION' : 'RESPONSE'}</div><div class="why-text">${renderMarkdownLite(implRaw)}</div>`,
     });
-  } catch (e) {
-    container.innerHTML = `<div class="diff"><div class="diff-head">error</div><pre><span class="del">${escapeHTML(String(e))}</span></pre></div>`;
-    container.dataset.loaded = '0';
   }
-}
+  if (hasFiles) {
+    // Single layer: the touched file list IS the diff affordance. Each path is
+    // an expandable <details> that lazy-loads its diff on open (handled by the
+    // global click handler). Previously TOUCHED (flat list) and DIFFS (same
+    // list, expandable) were two separate layers — you saw the file names,
+    // expanded again, then re-found the file. Merged so one expand on a known
+    // path opens its diff directly.
+    layers.push({
+      label: 'show files touched',
+      html: `<div class="why-label">TOUCHED · ${files.length} file${files.length === 1 ? '' : 's'} · expand any to diff vs previous prompt</div>` +
+        `<div class="diff-files">` +
+        files.map(f =>
+          `<details class="file-diff"><summary><code>${escapeHTML(f)}</code></summary>` +
+          `<div class="diff" data-iter-id="${it.id}" data-file-path="${escapeHTML(f)}"><div class="diff-head">expand to load diff</div></div>` +
+          `</details>`
+        ).join('') +
+        `</div>`,
+    });
+  }
 
-// Parse `git show` output into {body, files: [{path, lines[]}]}.
-// The body is the commit message between the Date: line and the first
-// `diff --git` boundary (mockup-style indentation: 4 spaces, stripped).
-function parseGitShow(text) {
-  const lines = text.split('\n');
-  let body = '';
-  const files = [];
-  let i = 0;
-  let afterDate = false;
-  for (; i < lines.length; i++) {
-    if (lines[i].startsWith('Date:')) { afterDate = true; continue; }
-    if (lines[i].startsWith('diff --git')) break;
-    if (afterDate) {
-      if (lines[i].startsWith('    ')) body += lines[i].slice(4) + '\n';
-      else if (body && lines[i].trim() === '') body += '\n';
-    }
-  }
-  body = body.trim();
-  // Per-file split on `diff --git` boundaries
-  let cur = null;
-  for (; i < lines.length; i++) {
-    if (lines[i].startsWith('diff --git')) {
-      if (cur) files.push(cur);
-      const m = lines[i].match(/diff --git a\/(\S+) b\//);
-      cur = { path: m ? m[1] : '(unknown)', lines: [] };
-      continue; // header line itself is replaced by .diff-head; don't include in body
-    }
-    if (cur) cur.lines.push(lines[i]);
-  }
-  if (cur) files.push(cur);
-  return { body, files };
-}
+  // Session chip + concurrency badge — both opt-in:
+  //   chip: only when multiple sessions exist in the feed
+  //   badge: only when this iter overlaps another session on a file
+  const badgesHTML = renderCardBadges(it);
 
-// Render an array of diff lines into a colored <pre>.
-function formatDiffLines(lines) {
-  const pre = document.createElement('pre');
-  lines.forEach(line => {
-    const span = document.createElement('span');
-    span.textContent = line + '\n';
-    if (line.startsWith('+++') || line.startsWith('---')) span.className = 'diff-file';
-    else if (line.startsWith('@@')) span.className = 'diff-hunk';
-    else if (line.startsWith('+')) span.className = 'add';
-    else if (line.startsWith('-')) span.className = 'del';
-    else if (line.startsWith('index ') || line.startsWith('new file') || line.startsWith('deleted file') || line.startsWith('similarity')) span.className = 'diff-meta';
-    else span.className = 'ctx';
-    pre.appendChild(span);
+  return buildCard({
+    statusClass: 'delta', cardID: 'iter-' + it.id, icon: '',
+    head, subtitle, badgesHTML, metaTsISO: it.ts, metaSuffix: fileHint,
+    initialDepth: 0, layers,
   });
-  return pre;
 }
 
-function buildCard({statusClass, cardID, icon, head, metaText, L2, L3, L4, initialDepth}) {
+function renderCardBadges(it) {
+  // Badges call out what THIS iter overwrote. Each badge is a clickable
+  // affordance that opens THIS card's own diff layer pre-focused on the
+  // affected file — showing prior-content-vs-current-content inline so the
+  // user sees what was actually replaced without scrolling away.
+  const parts = [];
+  const conc = concurrencyIndex[it.id];
+  if (!conc) return '';
+  // "overwrites" carries the legacy-external_edit case (rare now that we no
+  // longer auto-emit external_edit rows) PLUS uncommitted-manual-edit cases
+  // attached separately when leading-card data is wired.
+  for (const f of conc.overwrites) {
+    parts.push(`<a class="conc-badge overwrite" data-jump-to="iter-${it.id}" data-jump-file="${escapeHTML(f)}" title="click to see what was overwritten">⚠ overwrites a manual edit on <code>${escapeHTML(f)}</code> · show diff</a>`);
+  }
+  // Cross-session: prior touch was a different agent SESSION. NOT an
+  // "external edit" — call it accurately so the user knows the source.
+  for (const {file} of conc.crossSessions) {
+    parts.push(`<a class="conc-badge cross" data-jump-to="iter-${it.id}" data-jump-file="${escapeHTML(file)}" title="click to see what changed">⇄ overwrites another agent session's edit on <code>${escapeHTML(file)}</code> · show diff</a>`);
+  }
+  return parts.length ? `<div class="card-badges">${parts.join('')}</div>` : '';
+}
+
+// deriveSubtitleFromImpl: take the first meaningful line of the response text,
+// strip markdown chrome, and cap length. Used as the L0 subtitle on Q&A turns
+// where no MCP envelope summary was submitted.
+function deriveSubtitleFromImpl(impl) {
+  const lines = String(impl).trim().split('\n');
+  // First non-empty line that isn't a pure formatting marker
+  const first = lines.find(l => l.trim() && !/^[\-=*_]+$/.test(l.trim())) || '';
+  // Strip leading markdown: heading markers, list bullets, blockquote, surrounding **/*
+  const cleaned = first
+    .replace(/^[>#\-*]+\s*/, '')
+    .replace(/^\*\*([^*]+)\*\*$/, '$1')
+    .replace(/\*+/g, '')
+    .replace(/`/g, '')
+    .trim();
+  return cleaned.length > 110 ? cleaned.slice(0, 107) + '…' : cleaned;
+}
+
+// renderMarkdownLite: paragraphs, line breaks, backtick code, *em*. Cheap.
+function renderMarkdownLite(s) {
+  const paras = String(s).split(/\n{2,}/);
+  return paras.map(p => '<p>' + renderEmphasis(p).replace(/\n/g, '<br>') + '</p>').join('');
+}
+
+// buildCard renders a card with N reveal layers. Each layer has a label
+// (shown on the "show X" button when it's the next to reveal) and an html
+// string. Layers are slotted into card-l2/l3/l4 in order; empty/missing
+// layers don't render and don't get a button. For backwards compatibility
+// with the older anchor/claim callers, L2/L3/L4 props are accepted and
+// converted into a layers array with generic 'expand' labels.
+function buildCard({statusClass, cardID, icon, head, subtitle, badgesHTML, metaText, metaTsISO, metaSuffix, L2, L3, L4, layers, initialDepth}) {
+  if (!layers) {
+    layers = [L2, L3, L4].filter(Boolean).map(html => ({label: 'expand', html}));
+  }
   const card = document.createElement('article');
   card.className = 'card status-' + statusClass;
   card.dataset.depth = String(initialDepth || 0);
   card.dataset.cardId = cardID;
+  card.dataset.maxDepth = String(layers.length);
+  if (layers.length > 0) {
+    card.dataset.layerLabels = JSON.stringify(layers.map(l => l.label));
+  }
 
   const l1 = document.createElement('div');
-  l1.className = 'card-l1';
+  const hasIcon = icon && String(icon).trim() !== '';
+  const noToggle = layers.length === 0;
+  l1.className = 'card-l1' + (hasIcon ? '' : ' no-icon') + (noToggle ? ' no-toggle' : '');
+  const subtitleHTML = subtitle
+    ? `<div class="card-sub">${renderEmphasis(subtitle)}</div>`
+    : '';
+  const iconHTML = hasIcon ? `<span class="card-icon">${escapeHTML(icon)}</span>` : '';
+  // Meta: when an ISO ts + optional suffix are provided, render with data-ts
+  // attributes so tickTimestamps() can refresh the relTime portion in place.
+  // Legacy callers still pass a static metaText.
+  const metaHTML = metaTsISO
+    ? `<div class="card-meta" data-ts="${escapeHTML(metaTsISO)}" data-ts-suffix="${escapeHTML(metaSuffix || '')}">${escapeHTML(relTime(metaTsISO) + (metaSuffix || ''))}</div>`
+    : `<div class="card-meta">${escapeHTML(metaText || '')}</div>`;
   l1.innerHTML = `
-    <span class="card-icon">${escapeHTML(icon)}</span>
-    <div class="card-head">${renderEmphasis(head)}</div>
-    <div class="card-meta">${escapeHTML(metaText)}</div>
+    ${iconHTML}
+    <div class="card-l1-mid">
+      <div class="card-head">${renderEmphasis(head)}</div>
+      ${subtitleHTML}
+      ${badgesHTML || ''}
+    </div>
+    ${metaHTML}
   `;
   card.appendChild(l1);
 
-  const collapse = document.createElement('button');
-  collapse.className = 'card-collapse';
-  collapse.textContent = '▴ collapse';
-  card.appendChild(collapse);
+  layers.forEach((layer, idx) => {
+    const el = document.createElement('div');
+    el.className = `card-detail card-l${idx + 2}`;
+    el.innerHTML = layer.html;
+    card.appendChild(el);
+  });
 
-  let hasDetail = false;
-  if (L2) {
-    const el = document.createElement('div');
-    el.className = 'card-detail card-l2';
-    el.innerHTML = L2;
-    card.appendChild(el);
-    hasDetail = true;
-  }
-  if (L3) {
-    const el = document.createElement('div');
-    el.className = 'card-detail card-l3';
-    el.innerHTML = L3;
-    card.appendChild(el);
-    hasDetail = true;
-  }
-  if (L4) {
-    const el = document.createElement('div');
-    el.className = 'card-detail card-l4';
-    el.innerHTML = L4;
-    card.appendChild(el);
-    hasDetail = true;
-  }
-  if (hasDetail) {
+  if (layers.length > 0) {
     const more = document.createElement('button');
     more.className = 'card-more';
-    more.textContent = 'show more';
+    more.textContent = layers[0].label;
     card.appendChild(more);
   }
   return card;
 }
 
-// whyBlock = WHY label + evidence box.
-// (Mockup pattern from example.html L761-769. We don't have separate narrative
-// data, so the previous "prose" arg just repeated the head — removed.)
-function whyBlock(label, _unused, evidence) {
+// labelForCard returns the label that should appear on the "show more" button
+// when the card is at the given depth (i.e. what's *next* to reveal).
+function labelForCard(card, depth) {
+  try {
+    const labels = JSON.parse(card.dataset.layerLabels || '[]');
+    return labels[depth] || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+// whyBlock = label + optional prose + evidence box.
+function whyBlock(label, prose, evidence) {
   let html = `<div class="why-label">${escapeHTML(label)}</div>`;
+  if (prose && String(prose).trim()) {
+    html += `<p class="why-text">${renderEmphasis(prose)}</p>`;
+  }
   if (evidence && evidence.length) {
     html += `<div class="evidence">`;
     evidence.forEach(ev => {
@@ -626,56 +630,71 @@ function renderTimeline(iters) {
   const tl = document.getElementById('timeline');
   if (!tl) return;
   tl.innerHTML = '';
-  const sorted = iters.slice().sort((a, b) => new Date(b.ts) - new Date(a.ts));
-  // Rail title gets a time-window suffix (mockup: "ITERATIONS · 16h")
+  // Prompt-only rail (no commits)
+  const sorted = iters.filter(it => it.kind === 'iteration')
+    .slice().sort((a, b) => new Date(b.ts) - new Date(a.ts));
   const railTitle = document.getElementById('railTitle');
-  if (railTitle) {
-    if (sorted.length >= 2) {
-      const newest = new Date(sorted[0].ts);
-      const oldest = new Date(sorted[sorted.length - 1].ts);
-      railTitle.textContent = `ITERATIONS · ${spanLabel(newest - oldest)}`;
-    } else {
-      railTitle.textContent = 'ITERATIONS';
-    }
-  }
-  // Render items first; then measure and place the SINCE LAST SYNC band over
-  // the top N (currently top 3 — Phase 4 will read .sync/local/ack.json).
-  const bandCount = Math.min(3, sorted.length);
+  if (railTitle) railTitle.textContent = 'PROMPTS';
   sorted.forEach((it, i) => {
     const item = document.createElement('div');
     let klass = 'vtl-item';
-    if (it.kind === 'commit') klass += ' commit';
-    else if (i === 0) klass += ' active';
+    if (i === 0) klass += ' active';
     else if (i < 3) klass += ' recent';
     item.className = klass;
-    item.dataset.kind = it.kind;
-    if (it.kind === 'commit') {
-      item.dataset.sha = it.sha || '';
-      item.innerHTML = `${escapeHTML(it.sha?.slice(0, 7) || '?')}<div class="vtl-sha">${escapeHTML(truncate(it.summary || '', 32))}</div><div class="vtl-when">${relTime(it.ts)}</div>`;
-    } else {
-      item.dataset.iterId = String(it.id);
-      item.innerHTML = `iter #${it.id} · ${escapeHTML(truncate(it.summary || '', 36))}<div class="vtl-when">${relTime(it.ts)}${i === 0 ? ' · active' : ''}</div>`;
-    }
+    item.dataset.kind = 'iteration';
+    item.dataset.iterId = String(it.id);
+    const railHead = it.user_prompt && it.user_prompt.trim() ? it.user_prompt : (it.summary || '?');
+    const activeSuffix = i === 0 ? ' · active' : '';
+    item.innerHTML = `<div class="vtl-text">${escapeHTML(railHead)}</div><div class="vtl-when" data-ts="${escapeHTML(it.ts)}" data-ts-suffix="${escapeHTML(activeSuffix)}">${escapeHTML(relTime(it.ts) + activeSuffix)}</div>`;
     tl.appendChild(item);
   });
-  // Measure actual item heights and place the SINCE LAST SYNC band BEHIND the
-  // first N items. Insert the band as the FIRST child of .vtl so the items
-  // (later siblings) render on top of it.
-  if (bandCount > 0) {
-    const items = tl.querySelectorAll('.vtl-item');
-    if (items.length) {
-      const first = items[0];
-      const last = items[bandCount - 1];
-      const top = first.offsetTop;
-      const bottom = last.offsetTop + last.offsetHeight;
-      const band = document.createElement('div');
-      band.className = 'vtl-band';
-      band.style.top = (top - 4) + 'px';
-      band.style.height = (bottom - top + 8) + 'px';
-      band.innerHTML = `<div class="vtl-band-label">SINCE LAST SYNC</div>`;
-      tl.insertBefore(band, tl.firstChild);
+}
+
+// Lazy-load the prompt-based per-file diff: compares this iter's snapshot
+// of the file against the most recent prior iter that touched it. Older
+// iterations (pre-snapshotting) will return 404 — show a helpful message.
+async function loadFileDiff(detailsEl) {
+  const diffEl = detailsEl.querySelector('.diff[data-file-path]');
+  if (!diffEl || diffEl.dataset.loaded === '1') return;
+  diffEl.dataset.loaded = '1';
+  const path = diffEl.dataset.filePath;
+  const iterId = diffEl.dataset.iterId;
+  diffEl.innerHTML = `<div class="diff-head">loading…</div>`;
+  try {
+    const r = await fetch(`/prompt/${encodeURIComponent(iterId)}/diff?path=${encodeURIComponent(path)}`);
+    const text = await r.text();
+    if (r.status === 404) {
+      diffEl.innerHTML = `<div class="diff-head">${escapeHTML(path)}</div><pre><span class="ctx">${escapeHTML(text)}</span></pre>`;
+      return;
     }
+    if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + text);
+    diffEl.innerHTML = '';
+    const head = document.createElement('div');
+    head.className = 'diff-head';
+    head.textContent = path + ' · prompt #' + iterId + ' vs previous snapshot';
+    diffEl.appendChild(head);
+    diffEl.appendChild(formatDiffLines(text.split('\n')));
+  } catch (e) {
+    diffEl.innerHTML = `<div class="diff-head">error</div><pre><span class="del">${escapeHTML(String(e))}</span></pre>`;
+    diffEl.dataset.loaded = '0';
   }
+}
+
+// Render an array of diff lines into a colored <pre> (used for /git/file-diff).
+function formatDiffLines(lines) {
+  const pre = document.createElement('pre');
+  lines.forEach(line => {
+    const span = document.createElement('span');
+    span.textContent = line + '\n';
+    if (line.startsWith('+++') || line.startsWith('---')) span.className = 'diff-file';
+    else if (line.startsWith('@@')) span.className = 'diff-hunk';
+    else if (line.startsWith('+')) span.className = 'add';
+    else if (line.startsWith('-')) span.className = 'del';
+    else if (line.startsWith('commit ') || line.startsWith('Author:') || line.startsWith('Date:') || line.startsWith('index ') || line.startsWith('new file') || line.startsWith('deleted file')) span.className = 'diff-meta';
+    else span.className = 'ctx';
+    pre.appendChild(span);
+  });
+  return pre;
 }
 
 function scrollToCard(cardID, expandToDepth = 0) {
@@ -684,30 +703,11 @@ function scrollToCard(cardID, expandToDepth = 0) {
   if (expandToDepth > 0) {
     card.dataset.depth = String(expandToDepth);
     depthMemory[cardID] = String(expandToDepth);
-    if (cardID.startsWith('commit-')) loadCommitDetails(card);
   }
   card.scrollIntoView({behavior: 'smooth', block: 'center'});
   card.classList.add('flash');
   setTimeout(() => card.classList.remove('flash'), 1200);
   return true;
-}
-
-// ===== depth-button rail handlers =====
-function handleDepthCmd(cmd) {
-  if (cmd === 'claims') {
-    document.querySelector('.section-header .section-title:where(:not([data-x]))')?.scrollIntoView();
-    const target = [...document.querySelectorAll('.section-title')].find(t => t.textContent.includes('VIOLATED'));
-    target?.closest('.section-header')?.scrollIntoView({behavior: 'smooth', block: 'start'});
-  } else if (cmd === 'risks') {
-    const target = [...document.querySelectorAll('.section-title')].find(t => t.textContent.includes('AT RISK'));
-    target?.closest('.section-header')?.scrollIntoView({behavior: 'smooth', block: 'start'});
-  } else if (cmd === 'why') {
-    // Open the most recent delta's WHY (L2), not just scroll to the section.
-    const firstDelta = document.querySelector('.card.status-delta[data-card-id]');
-    if (firstDelta) scrollToCard(firstDelta.dataset.cardId, 2);
-  } else if (cmd === 'model') {
-    alert('?model not in v1 — Phase 6 will surface architecture from CONTEXT.md / ADRs.');
-  }
 }
 
 function empty(text) {
@@ -745,72 +745,117 @@ function escapeHTML(s) {
 
 // ===== Event delegation (survives DOM rebuilds) =====
 document.addEventListener('click', e => {
-  // status banner chips scroll to the matching section
-  const bannerChip = e.target.closest('.banner-chip');
-  if (bannerChip) {
-    e.stopPropagation();
-    const t = bannerChip.dataset.bannerTarget;
-    const target = [...document.querySelectorAll('.section-title')].find(s => s.textContent.includes(t));
-    target?.closest('.section-header')?.scrollIntoView({behavior: 'smooth', block: 'start'});
+  // per-file <details> toggling triggers lazy-load of its diff
+  const fileDiff = e.target.closest('details.file-diff > summary');
+  if (fileDiff) {
+    const det = fileDiff.parentElement;
+    setTimeout(() => { if (det.open) loadFileDiff(det); }, 0);
     return;
   }
 
-  // depth buttons in rail
-  const depthBtn = e.target.closest('.depth-btn');
-  if (depthBtn) {
-    e.stopPropagation();
-    handleDepthCmd(depthBtn.dataset.depthCmd);
-    return;
-  }
 
-  // rail timeline items navigate to their main-column card
+  // rail prompt items navigate to their main-column card
   const railItem = e.target.closest('.vtl-item');
-  if (railItem) {
-    if (railItem.dataset.kind === 'commit' && railItem.dataset.sha) {
-      e.stopPropagation();
-      scrollToCard('commit-' + railItem.dataset.sha, 3); // expand to L3 (diff)
-      return;
+  if (railItem?.dataset?.iterId) {
+    e.stopPropagation();
+    scrollToCard('iter-' + railItem.dataset.iterId, 0);
+    return;
+  }
+
+  // Click on a conc-badge: jump to + expand the prior iter's card, and
+  // open its diff details for the specific file at stake.
+  const jump = e.target.closest('[data-jump-to]');
+  if (jump) {
+    e.preventDefault();
+    e.stopPropagation();
+    const target = jump.dataset.jumpTo;
+    const file = jump.dataset.jumpFile;
+    const targetCard = document.querySelector(`.card[data-card-id="${target}"]`);
+    if (!targetCard) return;
+    // Expand to max depth so the diff layer is visible
+    const max = parseInt(targetCard.dataset.maxDepth || '0', 10);
+    if (max > 0) {
+      targetCard.dataset.depth = String(max);
+      depthMemory[target] = String(max);
+      const more = targetCard.querySelector('.card-more');
+      if (more) more.textContent = labelForCard(targetCard, max);
     }
-    if (railItem.dataset.kind === 'iteration' && railItem.dataset.iterId) {
-      e.stopPropagation();
-      scrollToCard('iter-' + railItem.dataset.iterId, 0);
-      return;
+    // Auto-open the file's diff details
+    if (file) {
+      const det = targetCard.querySelector(`details.file-diff:has(div[data-file-path="${CSS.escape(file)}"])`);
+      if (det) { det.open = true; loadFileDiff(det); }
     }
+    targetCard.scrollIntoView({behavior: 'smooth', block: 'center'});
+    targetCard.classList.add('flash');
+    setTimeout(() => targetCard.classList.remove('flash'), 1200);
+    return;
   }
 
   const card = e.target.closest('.card');
   if (!card) return;
   const id = card.dataset.cardId;
-  if (e.target.closest('.card-collapse')) {
-    e.stopPropagation();
-    card.dataset.depth = '0';
-    if (id) depthMemory[id] = '0';
-    return;
-  }
-  // card-more: increment, stop at 3 (matches mockup line 1205)
+  const max = parseInt(card.dataset.maxDepth || '0', 10);
+  const setDepth = (newDepth) => {
+    card.dataset.depth = String(newDepth);
+    if (id) depthMemory[id] = String(newDepth);
+    const more = card.querySelector('.card-more');
+    if (more) more.textContent = labelForCard(card, newDepth);
+  };
+
+  // card-more: increment, stop at max depth
   if (e.target.closest('.card-more')) {
     e.stopPropagation();
     const d = parseInt(card.dataset.depth || '0', 10);
-    if (d < 3) {
-      const newDepth = d + 1;
-      card.dataset.depth = String(newDepth);
-      if (id) depthMemory[id] = String(newDepth);
-      // Commit cards: trigger lazy-load at L1 so the explanation appears
-      // as soon as the user expands (before they reach the diff at L3).
-      if (newDepth >= 1 && id?.startsWith('commit-')) loadCommitDetails(card);
-    }
+    if (d < max) setDepth(d + 1);
     return;
   }
-  // card-l1 click: increment, wrap 3→0 (matches mockup line 1222)
-  if (e.target.closest('.card-l1') && !e.target.closest('button')) {
+  // Click on an open child block toggles the NEXT child block.
+  //   click card-l2 ↔ show/hide card-l3
+  //   click card-l3 ↔ show/hide card-l4
+  //   click card-l4 → step back to card-l3 visible
+  // Don't trigger inside an interactive child (link, button, file-diff toggle).
+  const l4 = e.target.closest('.card-l4');
+  if (l4 && !e.target.closest('button, a, summary, details')) {
+    e.stopPropagation();
+    setDepth(2);
+    return;
+  }
+  const l3 = e.target.closest('.card-l3');
+  if (l3 && !e.target.closest('button, a, summary, details')) {
     e.stopPropagation();
     const d = parseInt(card.dataset.depth || '0', 10);
-    const newDepth = d < 3 ? d + 1 : 0;
-    card.dataset.depth = String(newDepth);
-    if (id) depthMemory[id] = String(newDepth);
-    if (newDepth >= 1 && id?.startsWith('commit-')) loadCommitDetails(card);
+    setDepth(d >= 3 ? 2 : 3);
+    return;
+  }
+  const l2 = e.target.closest('.card-l2');
+  if (l2 && !e.target.closest('button, a, summary, details')) {
+    e.stopPropagation();
+    const d = parseInt(card.dataset.depth || '0', 10);
+    setDepth(d >= 2 ? 1 : 2);
+    return;
+  }
+  // card-l1 click: TOGGLE (open/close) at depth 0↔1. Skip when there's
+  // nothing to reveal (no layers → no point pretending the card is clickable).
+  if (e.target.closest('.card-l1') && !e.target.closest('button') && max > 0) {
+    e.stopPropagation();
+    const d = parseInt(card.dataset.depth || '0', 10);
+    setDepth(d === 0 ? 1 : 0);
   }
 });
 
+// Live ticker for relative timestamps: rewrites the text of any element
+// carrying data-ts="<iso>" (with optional data-ts-suffix). The state-poll
+// load() runs every 2s but only re-renders on hash change, so cards left
+// untouched would otherwise show stale "5s ago" forever.
+function tickTimestamps() {
+  document.querySelectorAll('[data-ts]').forEach(el => {
+    const iso = el.dataset.ts;
+    if (!iso) return;
+    el.textContent = relTime(iso) + (el.dataset.tsSuffix || '');
+  });
+  if (currentState) setStatus('synced', syncStateText(currentState));
+}
+
 load();
 setInterval(load, 2000);
+setInterval(tickTimestamps, 1000);

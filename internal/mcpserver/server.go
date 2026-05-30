@@ -138,6 +138,48 @@ func Serve(projectDir string) error {
 		},
 	)
 
+	s.AddTool(
+		mcp.NewTool("set_implementation",
+			mcp.WithDescription(
+				"REQUIRED for every assistant turn that edits files in this project. "+
+					"Submit a structured teach-back describing what you did this turn — "+
+					"shown on the cockpit dashboard's prompt card. Call this BEFORE ending "+
+					"your turn, after all your edits are done. Plain markdown (paragraphs, "+
+					"*emphasis*, `code`, lists) renders cleanly. Multiple calls in one turn "+
+					"→ last call wins. If you forget, the L0 subtitle stays empty and the L1 "+
+					"falls back to your last text block (noisy).\n\n"+
+					"Two fields:\n"+
+					"  - summary: 1-2 line condensed teach-back. Shown as the L0 card "+
+					"subtitle, directly under the user prompt. ~140 chars is the sweet spot.\n"+
+					"  - text: the full teach-back, ~50-300 words at one level of abstraction "+
+					"above the diff. What was built, the load-bearing reason for the shape, "+
+					"any decision the user should know about. NOT a code dump.",
+			),
+			mcp.WithString("summary",
+				mcp.Required(),
+				mcp.Description("1-2 line condensed teach-back. Becomes the L0 subtitle on the prompt card. Keep it crisp — what you did, in plain prose. Avoid markdown lists; one or two sentences."),
+			),
+			mcp.WithString("text",
+				mcp.Required(),
+				mcp.Description("The full teach-back. Plain markdown. ~50-300 words. This is what the user reads when they click into the IMPLEMENTATION block (L1)."),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			summary, err := req.RequireString("summary")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			text, err := req.RequireString("text")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := SetImplementation(projectDir, SetImplementationArgs{Summary: summary, Text: text}); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("teach-back queued (summary=%d chars, text=%d chars) — observe will consume at end of turn", len(summary), len(text))), nil
+		},
+	)
+
 	return server.ServeStdio(s)
 }
 

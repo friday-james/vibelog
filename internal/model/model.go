@@ -10,6 +10,27 @@ type State struct {
 	Anchor     Anchor      `json:"anchor"`
 	Claims     []Claim     `json:"claims"`
 	Iterations []Iteration `json:"iterations"`
+	// CurrentDrift is computed live by the /state.json handler from
+	// `git status` minus agent-owned files. Never persisted to .sync/.
+	CurrentDrift *Drift `json:"current_drift,omitempty"`
+}
+
+// Drift represents the engineer's uncommitted manual edits that the agent
+// hasn't subsequently overwritten — i.e., "what's still yours, not yet
+// committed." Drives the leading card on the dashboard.
+type Drift struct {
+	HeadSHA   string       `json:"head_sha,omitempty"`   // short HEAD SHA at compute time
+	StartedAt time.Time    `json:"started_at,omitempty"` // earliest mtime among drifted files (best-effort)
+	Files     []DriftFile  `json:"files"`                // sorted by Path
+	NotGit    bool         `json:"not_git,omitempty"`    // set when projectDir has no .git/
+}
+
+// DriftFile is one file currently in drift state.
+type DriftFile struct {
+	Path      string `json:"path"`
+	Status    string `json:"status"`              // "M" | "D" | "?" | "R" | "A"
+	ShortStat string `json:"short_stat,omitempty"` // "+14 −3" or "new" / "deleted" / "binary"
+	OldPath   string `json:"old_path,omitempty"`  // set when Status == "R"
 }
 
 func (s *State) Validate() error {
@@ -304,8 +325,9 @@ func (e *Evidence) Validate() error {
 type IterationKind string
 
 const (
-	KindIteration IterationKind = "iteration"
-	KindCommit    IterationKind = "commit"
+	KindIteration    IterationKind = "iteration"
+	KindCommit       IterationKind = "commit"
+	KindExternalEdit IterationKind = "external_edit" // synthetic row in the linear timeline for an off-prompt file change
 )
 
 // Iteration is one assistant turn that touched code (kind=iteration) OR one
@@ -335,6 +357,9 @@ type Iteration struct {
 	FileHashes          map[string]string `json:"file_hashes,omitempty"`           // path -> sha256 of post-state content, for file-divergence detection
 	SupersededAt        *time.Time        `json:"superseded_at,omitempty"`
 	SupersededReason    string            `json:"superseded_reason,omitempty"` // "rollback" | "file_diverged" | "manual"
+
+	UserPrompt     string `json:"user_prompt,omitempty"`     // the user's actual message that triggered this turn (head text in the UI)
+	Implementation string `json:"implementation,omitempty"`  // full concatenated assistant text from the turn — the L1 teach-back
 }
 
 func (i *Iteration) Validate() error {
@@ -350,6 +375,10 @@ func (i *Iteration) Validate() error {
 	case KindCommit:
 		if i.SHA == "" {
 			return fmt.Errorf("iteration %d: kind=commit requires sha", i.ID)
+		}
+	case KindExternalEdit:
+		if len(i.FilesChanged) == 0 {
+			return fmt.Errorf("iteration %d: kind=external_edit requires at least one file", i.ID)
 		}
 	case "":
 		return fmt.Errorf("iteration %d: kind is required", i.ID)

@@ -1,3 +1,5 @@
 /cockpit
 .sync/local/
 *.tmp
+build-artifacts/
+.env

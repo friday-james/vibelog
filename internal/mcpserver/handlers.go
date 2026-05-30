@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -29,6 +30,8 @@ type RecordIterationArgs struct {
 	ClaimsAdded         []string `json:"claims_added,omitempty"`
 	ClaimsViolated      []string `json:"claims_violated,omitempty"`
 	TranscriptMessageID string   `json:"transcript_message_id,omitempty"`
+	UserPrompt          string   `json:"user_prompt,omitempty"`
+	Implementation      string   `json:"implementation,omitempty"`
 }
 
 // AssertClaimArgs is the typed input for the assert_claim tool. evidence_json
@@ -53,6 +56,22 @@ type UpdateAnchorArgs struct {
 	IntentJSON   string `json:"intent_json,omitempty"`
 	ApproachJSON string `json:"approach_json,omitempty"`
 	NowJSON      string `json:"now_json,omitempty"`
+}
+
+// SetImplementationArgs is the typed input for the set_implementation tool.
+// Summary is the L0 subtitle (1-2 lines); Text is the L1 long teach-back.
+type SetImplementationArgs struct {
+	Summary string `json:"summary"`
+	Text    string `json:"text"`
+}
+
+// pendingEnvelope is the JSON shape written to .sync/pending_implementation.txt.
+// observe validates session_id + ts before consuming.
+type pendingEnvelope struct {
+	Summary   string `json:"summary"`
+	Text      string `json:"text"`
+	SessionID string `json:"session_id"`
+	Ts        string `json:"ts"`
 }
 
 // RecordIteration appends a new iteration to projectDir/.sync/iterations.jsonl,
@@ -83,11 +102,13 @@ func RecordIteration(projectDir string, args RecordIterationArgs) (*model.Iterat
 		}
 	}
 
-	// Next id = max existing iteration-kind id + 1. Commit ids are a separate
-	// sequence (per (kind,id) composite uniqueness) so they don't affect this.
+	// Next id walks ALL iteration-like kinds (iteration + legacy external_edit
+	// rows in older histories) so they share a single linear timeline. Commit
+	// ids stay in their own sequence (composite (kind,id) uniqueness) and
+	// don't perturb this.
 	nextID := 1
 	for _, it := range state.Iterations {
-		if it.Kind == model.KindIteration && it.ID >= nextID {
+		if (it.Kind == model.KindIteration || it.Kind == model.KindExternalEdit) && it.ID >= nextID {
 			nextID = it.ID + 1
 		}
 	}
@@ -103,6 +124,8 @@ func RecordIteration(projectDir string, args RecordIterationArgs) (*model.Iterat
 		Agent:               "claude-code",
 		SessionID:           os.Getenv("CLAUDE_SESSION_ID"),
 		TranscriptMessageID: args.TranscriptMessageID,
+		UserPrompt:          args.UserPrompt,
+		Implementation:      args.Implementation,
 	}
 	if err := iter.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid iteration: %w", err)
@@ -114,6 +137,23 @@ func RecordIteration(projectDir string, args RecordIterationArgs) (*model.Iterat
 	}
 	line = append(line, '\n')
 
+	// H1: snapshot every touched file BEFORE appending the iter row. The
+	// drift detector reads "the most recent prior snapshot for this file"
+	// the moment it sees a new row; if the row landed before its snapshots,
+	// a concurrent poll could briefly hash-mismatch and falsely flag the
+	// agent's own write as drift. Ordering closes that race.
+	snapshotsDir := filepath.Join(projectDir, ".sync", "snapshots", fmt.Sprintf("iter-%d", iter.ID))
+	for _, rel := range iter.FilesChanged {
+		src := filepath.Join(projectDir, rel)
+		dst := filepath.Join(snapshotsDir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			continue
+		}
+		// H2: atomic snapshot write (tmp + rename) so a half-written snapshot
+		// can't be observed by a concurrent reader.
+		_ = atomicCopyFile(src, dst)
+	}
+
 	iterPath := filepath.Join(projectDir, ".sync", "iterations.jsonl")
 	f, err := os.OpenFile(iterPath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 	if err != nil {
@@ -123,7 +163,34 @@ func RecordIteration(projectDir string, args RecordIterationArgs) (*model.Iterat
 	if _, err := f.Write(line); err != nil {
 		return nil, fmt.Errorf("append: %w", err)
 	}
+
 	return &iter, nil
+}
+
+// atomicCopyFile copies src → dst by writing to dst.tmp first then renaming,
+// so a partial write is never observable by readers. Safe across crashes:
+// the dst either has the old content (if rename never happened) or the new
+// content (if rename completed). Same-filesystem rename is atomic on macOS.
+func atomicCopyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".snap-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op if rename succeeded
+	if _, err := io.Copy(tmp, in); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, dst)
 }
 
 // AssertClaim creates or updates a claim by id in projectDir's claims.yaml.
@@ -258,4 +325,34 @@ func atomicWrite(path string, data []byte) error {
 		return fmt.Errorf("rename %s: %w", filepath.Base(path), err)
 	}
 	return nil
+}
+
+// SetImplementation writes a teach-back envelope to
+// .sync/pending_implementation.txt. observe (running in the Stop hook)
+// consumes the envelope and applies the text to that turn's iteration
+// record, then deletes the file. Multi-call-per-turn → last call wins.
+//
+// Envelope carries session_id + timestamp so observe can reject stale
+// pending files (left over from a crashed observe in a previous turn).
+func SetImplementation(projectDir string, args SetImplementationArgs) error {
+	if strings.TrimSpace(args.Text) == "" {
+		return fmt.Errorf("text is required")
+	}
+	if strings.TrimSpace(args.Summary) == "" {
+		return fmt.Errorf("summary is required (1-2 line condensed teach-back for the L0 subtitle)")
+	}
+	env := pendingEnvelope{
+		Summary:   args.Summary,
+		Text:      args.Text,
+		SessionID: os.Getenv("CLAUDE_SESSION_ID"),
+		Ts:        time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		return fmt.Errorf("marshal envelope: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(projectDir, ".sync")); err != nil {
+		return fmt.Errorf(".sync/ not initialized at %s — run `cockpit init`", projectDir)
+	}
+	return atomicWrite(filepath.Join(projectDir, ".sync", "pending_implementation.txt"), data)
 }
