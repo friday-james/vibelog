@@ -1,4 +1,4 @@
-// Package initcmd implements `cockpit init` — creates a fresh .sync/ skeleton
+// Package initcmd implements `vibelog init` — creates a fresh .sync/ skeleton
 // in a project directory so the writer (MCP server) has somewhere to record.
 //
 // The skeleton is intentionally minimum-valid: TODO statements with missing-
@@ -17,7 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"cockpit/internal/model"
+	"vibelog/internal/model"
 )
 
 // ErrAlreadyInitialized is returned when .sync/anchor.yaml exists at the target.
@@ -63,7 +63,7 @@ func Run(dir string) error {
 				Note: "Author this once a clear approach is in place.",
 			}},
 			LastChanged:  now,
-			ChangeReason: "initialized by cockpit init",
+			ChangeReason: "initialized by vibelog init",
 		},
 		Now: model.Now{
 			Statement:   "TODO: what are you doing right now?",
@@ -89,7 +89,7 @@ func Run(dir string) error {
 
 	iter1 := model.Iteration{
 		ID: 1, Ts: now, Kind: model.KindIteration,
-		Summary: "cockpit init", Agent: "cockpit-cli",
+		Summary: "vibelog init", Agent: "vibelog-cli",
 	}
 	iter1Bytes, err := json.Marshal(iter1)
 	if err != nil {

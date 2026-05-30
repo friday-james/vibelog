@@ -1,4 +1,4 @@
-// Package watchcmd implements `cockpit watch` — a terminal observer that
+// Package watchcmd implements `vibelog watch` — a terminal observer that
 // tails iterations.jsonl and pretty-prints each entry as it lands. Pre-UI
 // observability for the dogfood loop.
 package watchcmd
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"cockpit/internal/model"
+	"vibelog/internal/model"
 )
 
 // Run tails projectDir/.sync/iterations.jsonl forever (or until stdin closes

@@ -1,4 +1,4 @@
-// Package gitcmd implements `cockpit ingest-git` — walks `git log` and
+// Package gitcmd implements `vibelog ingest-git` — walks `git log` and
 // appends each new commit to iterations.jsonl as a kind=commit entry, so
 // the rail shows real commits alongside agent iterations.
 //
@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"cockpit/internal/model"
-	"cockpit/internal/store"
+	"vibelog/internal/model"
+	"vibelog/internal/store"
 )
 
 // Result reports what ingest-git did.

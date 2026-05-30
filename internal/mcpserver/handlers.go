@@ -1,4 +1,4 @@
-// Package mcpserver wires cockpit's MCP tools and runs the stdio server.
+// Package mcpserver wires vibelog's MCP tools and runs the stdio server.
 //
 // Each tool's logic lives in a pure function (RecordIteration, etc.) so it
 // can be unit-tested without the JSON-RPC plumbing. server.go is a thin
@@ -19,8 +19,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"cockpit/internal/model"
-	"cockpit/internal/store"
+	"vibelog/internal/model"
+	"vibelog/internal/store"
 )
 
 // RecordIterationArgs is the typed input for the record_iteration tool.
@@ -86,7 +86,7 @@ func RecordIteration(projectDir string, args RecordIterationArgs) (*model.Iterat
 	state, err := store.Load(projectDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf(".sync/ not initialized at %s — run `cockpit init` first", projectDir)
+			return nil, fmt.Errorf(".sync/ not initialized at %s — run `vibelog init` first", projectDir)
 		}
 		return nil, fmt.Errorf("load current state: %w", err)
 	}
@@ -201,7 +201,7 @@ func AssertClaim(projectDir string, args AssertClaimArgs) (*model.Claim, error) 
 	state, err := store.Load(projectDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf(".sync/ not initialized at %s — run `cockpit init` first", projectDir)
+			return nil, fmt.Errorf(".sync/ not initialized at %s — run `vibelog init` first", projectDir)
 		}
 		return nil, fmt.Errorf("load current state: %w", err)
 	}
@@ -273,7 +273,7 @@ func UpdateAnchor(projectDir string, args UpdateAnchorArgs) (*model.Anchor, erro
 	state, err := store.Load(projectDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf(".sync/ not initialized at %s — run `cockpit init` first", projectDir)
+			return nil, fmt.Errorf(".sync/ not initialized at %s — run `vibelog init` first", projectDir)
 		}
 		return nil, fmt.Errorf("load current state: %w", err)
 	}
@@ -352,7 +352,7 @@ func SetImplementation(projectDir string, args SetImplementationArgs) error {
 		return fmt.Errorf("marshal envelope: %w", err)
 	}
 	if _, err := os.Stat(filepath.Join(projectDir, ".sync")); err != nil {
-		return fmt.Errorf(".sync/ not initialized at %s — run `cockpit init`", projectDir)
+		return fmt.Errorf(".sync/ not initialized at %s — run `vibelog init`", projectDir)
 	}
 	return atomicWrite(filepath.Join(projectDir, ".sync", "pending_implementation.txt"), data)
 }

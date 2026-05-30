@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"cockpit/internal/store"
+	"vibelog/internal/store"
 )
 
 func TestLoad_Happy(t *testing.T) {

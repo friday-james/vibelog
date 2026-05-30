@@ -1,4 +1,4 @@
-// Package serve hosts the cockpit dashboard UI and a /state.json endpoint
+// Package serve hosts the vibelog dashboard UI and a /state.json endpoint
 // backed by store.Load. Phase 1: HTTP polling. Phase 2 will add SSE so the
 // UI reacts to .sync/ changes in <200ms.
 package serve
@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"cockpit/internal/store"
+	"vibelog/internal/store"
 )
 
 //go:embed ui

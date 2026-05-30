@@ -10,10 +10,10 @@ import (
 )
 
 // Serve runs the MCP server on stdio. projectDir is the directory whose .sync/
-// the tools mutate; pass the workspace root from `cockpit mcp <dir>`. Returns
+// the tools mutate; pass the workspace root from `vibelog mcp <dir>`. Returns
 // when stdin closes or an unrecoverable error occurs.
 func Serve(projectDir string) error {
-	s := server.NewMCPServer("cockpit", "0.1.0-dev")
+	s := server.NewMCPServer("vibelog", "0.1.0-dev")
 
 	s.AddTool(
 		mcp.NewTool("record_iteration",
@@ -143,7 +143,7 @@ func Serve(projectDir string) error {
 			mcp.WithDescription(
 				"REQUIRED for every assistant turn that edits files in this project. "+
 					"Submit a structured teach-back describing what you did this turn — "+
-					"shown on the cockpit dashboard's prompt card. Call this BEFORE ending "+
+					"shown on the vibelog dashboard's prompt card. Call this BEFORE ending "+
 					"your turn, after all your edits are done. Plain markdown (paragraphs, "+
 					"*emphasis*, `code`, lists) renders cleanly. Multiple calls in one turn "+
 					"→ last call wins. If you forget, the L0 subtitle stays empty and the L1 "+

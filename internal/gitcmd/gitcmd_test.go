@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"cockpit/internal/gitcmd"
-	"cockpit/internal/initcmd"
-	"cockpit/internal/model"
-	"cockpit/internal/store"
+	"vibelog/internal/gitcmd"
+	"vibelog/internal/initcmd"
+	"vibelog/internal/model"
+	"vibelog/internal/store"
 )
 
 // makeGitRepo initializes a git repo in tmp with a small commit history.

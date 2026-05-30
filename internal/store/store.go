@@ -13,7 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"cockpit/internal/model"
+	"vibelog/internal/model"
 )
 
 // Load reads dir/.sync/{anchor.yaml, claims.yaml, iterations.jsonl} and
@@ -61,7 +61,7 @@ func readYAML(path string, dst any) error {
 }
 
 // readJSONL is forgiving on a per-row basis: an iteration written by a NEWER
-// cockpit binary (e.g. a kind this binary doesn't yet recognise) is dropped
+// vibelog binary (e.g. a kind this binary doesn't yet recognise) is dropped
 // with a stderr warning rather than failing the whole load. Without this, a
 // single-row schema mismatch turns every Stop hook subsequent into an error
 // — including hooks from older sessions whose binary is out of date relative
@@ -79,11 +79,11 @@ func readJSONL(path string) ([]model.Iteration, error) {
 		}
 		var it model.Iteration
 		if err := json.Unmarshal([]byte(line), &it); err != nil {
-			fmt.Fprintf(os.Stderr, "cockpit: skipping iterations.jsonl line %d (unparseable): %v\n", lineNum+1, err)
+			fmt.Fprintf(os.Stderr, "vibelog: skipping iterations.jsonl line %d (unparseable): %v\n", lineNum+1, err)
 			continue
 		}
 		if err := it.Validate(); err != nil {
-			fmt.Fprintf(os.Stderr, "cockpit: skipping iterations.jsonl line %d (validation failed — likely a newer binary wrote this row): %v\n", lineNum+1, err)
+			fmt.Fprintf(os.Stderr, "vibelog: skipping iterations.jsonl line %d (validation failed — likely a newer binary wrote this row): %v\n", lineNum+1, err)
 			continue
 		}
 		out = append(out, it)

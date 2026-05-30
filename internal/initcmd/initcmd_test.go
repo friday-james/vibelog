@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"cockpit/internal/initcmd"
-	"cockpit/internal/store"
+	"vibelog/internal/initcmd"
+	"vibelog/internal/store"
 )
 
 func TestRun_FreshDir(t *testing.T) {

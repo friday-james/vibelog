@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"cockpit/internal/initcmd"
-	"cockpit/internal/mcpserver"
-	"cockpit/internal/store"
+	"vibelog/internal/initcmd"
+	"vibelog/internal/mcpserver"
+	"vibelog/internal/store"
 )
 
 func TestRecordIteration_AppendsAndAssignsID(t *testing.T) {

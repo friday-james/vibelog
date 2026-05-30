@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"cockpit/internal/observecmd"
+	"vibelog/internal/observecmd"
 )
 
 // withStdin temporarily replaces os.Stdin with the given bytes for the
@@ -109,7 +109,7 @@ func TestAnalyzeTranscript_PureConversation(t *testing.T) {
 
 func TestRun_SilentSkipOnUninitializedProject(t *testing.T) {
 	// Project dir exists but has no .sync/ — observe must return nil cleanly,
-	// not error, so the global Stop hook is harmless in non-cockpit repos.
+	// not error, so the global Stop hook is harmless in non-vibelog repos.
 	tmp := t.TempDir()
 	transcript := filepath.Join(tmp, "tr.jsonl")
 	if err := os.WriteFile(transcript, []byte(

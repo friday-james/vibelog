@@ -1,4 +1,4 @@
-// Package observecmd implements `cockpit observe` — the Stop-hook handler.
+// Package observecmd implements `vibelog observe` — the Stop-hook handler.
 //
 // Claude Code's Stop hook fires when an assistant turn ends. It writes a JSON
 // payload to stdin containing the transcript path; observecmd reads that,
@@ -28,15 +28,15 @@ import (
 	"strings"
 	"time"
 
-	"cockpit/internal/mcpserver"
+	"vibelog/internal/mcpserver"
 )
 
-// dbg appends a diagnostic line to /tmp/cockpit-observe.log so we can see
+// dbg appends a diagnostic line to /tmp/vibelog-observe.log so we can see
 // when Stop hook actually fires (or doesn't) and what payload it receives.
 // Failure to open the log file is silently ignored — the hook must never
 // disrupt the assistant's turn even if /tmp is unwritable.
 func dbg(format string, args ...any) {
-	f, err := os.OpenFile("/tmp/cockpit-observe.log", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	f, err := os.OpenFile("/tmp/vibelog-observe.log", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 	if err != nil {
 		return
 	}
@@ -128,7 +128,7 @@ func Run(projectDir string) error {
 	}
 	dbg("analyzed: msgID=%q, summary=%q (len=%d), %d files, impl=%d", res.LastMessageUUID, res.SummaryText, len(res.SummaryText), len(res.Files), len(res.Implementation))
 
-	// Layer 1 (preferred): the agent called mcp__cockpit__set_implementation
+	// Layer 1 (preferred): the agent called mcp__vibelog__set_implementation
 	// during the turn. The MCP tool wrote a JSON envelope to .sync/pending_implementation.txt.
 	// Validate session_id + age, then consume + delete. On validation failure
 	// we just fall through and keep the heuristic Implementation (last text block).

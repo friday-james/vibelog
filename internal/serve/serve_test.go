@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"cockpit/internal/initcmd"
-	"cockpit/internal/serve"
+	"vibelog/internal/initcmd"
+	"vibelog/internal/serve"
 )
 
 func TestHandler_StateEndpoint(t *testing.T) {

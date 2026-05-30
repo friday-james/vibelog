@@ -1,4 +1,4 @@
-module cockpit
+module vibelog
 
 go 1.25.5
 

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"cockpit/internal/watchcmd"
+	"vibelog/internal/watchcmd"
 )
 
 func TestFormat_IterationFull(t *testing.T) {
