@@ -188,6 +188,27 @@ function render(s) {
     const id = card.dataset.cardId;
     if (depthMemory[id]) card.dataset.depth = depthMemory[id];
   });
+
+  // Dev/docs helper: `?expand=N&card=M` opens the Mth card (0-indexed) to depth N
+  // and auto-loads its diff details. Used for README screenshots.
+  const params = new URLSearchParams(location.search);
+  const expandDepth = parseInt(params.get('expand') || '0', 10);
+  const cardIdx = parseInt(params.get('card') || '0', 10);
+  if (expandDepth > 0) {
+    const cards = document.querySelectorAll('#app .card[data-card-id]');
+    const target = cards[cardIdx];
+    if (target) {
+      const max = parseInt(target.dataset.maxDepth || '0', 10);
+      const d = Math.min(expandDepth, max);
+      target.dataset.depth = String(d);
+      // Auto-open all file-diff <details> inside the expanded card and trigger
+      // their lazy-loaders so the diff text renders in the screenshot.
+      target.querySelectorAll('details.file-diff').forEach(det => {
+        det.open = true;
+        loadFileDiff(det);
+      });
+    }
+  }
 }
 
 // statusBanner answers "is anything broken?" in one glance. Clicks scroll to

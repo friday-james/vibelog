@@ -1,5 +1,5 @@
 <h1 align="center">
-  🎚️ vibelog
+  📒 vibelog
 </h1>
 
 <p align="center">
