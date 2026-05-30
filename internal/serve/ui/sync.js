@@ -202,7 +202,7 @@ function render(s) {
       const d = Math.min(expandDepth, max);
       target.dataset.depth = String(d);
       // Auto-open all file-diff <details> inside the expanded card and trigger
-      // their lazy-loaders so the diff text renders in the screenshot.
+      // their lazy-loaders so the diff text renders.
       target.querySelectorAll('details.file-diff').forEach(det => {
         det.open = true;
         loadFileDiff(det);
