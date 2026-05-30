@@ -3,8 +3,8 @@
 </h1>
 
 <p align="center">
-  <b>A log for vibe coding.</b><br/>
-  Every prompt the agent answered, every file it touched, on one page.
+  <b>The discipline layer for AI-assisted coding.</b><br/>
+  A reviewable per-turn log of what the agent did and why.
 </p>
 
 <p align="center">
@@ -21,15 +21,38 @@
 
 ## What it is
 
-A small dashboard that records every assistant turn from your AI coding sessions and shows them as a list. Click a prompt to see what the agent said back, which files it touched, and the diff for each one.
+vibelog is a local audit trail for AI-assisted coding. It records each agent turn as a row with a short teach-back, the files touched, and a per-file diff against the previous time that file was touched. It runs in the background next to your repo, reads git, and stores plain files on disk. You keep coding the way you already do. When something breaks or a reviewer asks what changed, you have a sequence to point at instead of a chat scrollback to excavate.
 
-No daemon, no DB, no telemetry. It writes plain JSONL into `.sync/` next to your repo and serves a single page on `localhost:7100`.
+No daemon, no database, no telemetry. Plain JSONL into `.sync/`, a single page on `localhost:7100`.
 
 ---
 
 ## Why
 
-If you let an agent move fast, you stop remembering what it touched. vibelog gives you the receipts: every prompt you sent, every reply, every file edited, kept in chronological order so you can scroll back and audit a session the same way you'd `git log`.
+Vibe coding ships real software. Most of the time it is fine. The trouble starts when you need to look backwards, and the tools you have were built for a slower kind of editing.
+
+A few of the failure modes vibelog is built around:
+
+- Two Claude sessions on the same checkout race each other. The second write wins. The first session's edits vanish without a commit ever naming them.
+- An agent rewrites a function you hand-tuned an hour ago. The diff looks plausible, you accept, the tuning is gone.
+- A regression lands. You cannot tell whether you introduced it during a refactor, the agent introduced it while fixing a test, or the formatter shifted a line that masked it.
+- By the time something breaks, the working tree has ten unrelated edits stacked on top of the one that mattered. `git diff` shows the current mess, not the sequence that produced it. `git log` only sees what you remembered to commit, and vibe sessions rarely commit per turn.
+- A teammate asks what you changed yesterday. The honest answer is "the agent did a lot" and you cannot point at the moment it happened.
+- Future-you is a stranger. Two weeks from now you will not remember which prompt produced which line.
+
+vibelog puts the engineering workflow back: an ordered log you scroll, a per-turn diff you can attribute, a teach-back written when the change was made.
+
+---
+
+## Philosophy
+
+- Every agent turn leaves a receipt. If a file was touched, there is a row you can point at, with a diff and a one-line reason.
+- Diffs are per-file and per-turn, not per-commit. You see what this specific edit did to this specific file, without the noise of unrelated changes.
+- The teach-back is written when the change happens, by the agent that made it. Not reconstructed later from chat scrollback.
+- Working tree state is not a substitute for history. A later `git stash` or rebase does not erase what the agent actually did.
+- If you cannot tell who touched a line and why, the tooling failed you, not you.
+- Optimize for the question you will ask in six hours, not the one you are asking now.
+- Local first, plain files on disk. Git is the source of truth. vibelog reads it, it does not replace it.
 
 ---
 
