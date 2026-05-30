@@ -72,13 +72,13 @@ Add this to `~/.claude/settings.json`:
 
 If `vibelog` isn't on the PATH that Claude Code spawns hooks with, use the absolute path: `/Users/you/go/bin/vibelog observe`.
 
-### (Recommended) MCP server for deterministic teach-backs
+### MCP server for teach-backs (required)
 
 ```bash
 claude mcp add vibelog vibelog mcp
 ```
 
-This registers a `set_implementation` tool. When the agent calls it, the curated summary + response text are saved *during* the turn — sidestepping the race where Claude Code flushes the assistant's reply to the transcript after the Stop hook has already read it. Without this, vibelog falls back to a transcript-tail heuristic that loses on longer Q&A turns.
+This registers a `set_implementation` tool the agent calls at the end of every turn. The curated summary + response text are saved *during* the turn, so they're guaranteed to be there when the Stop hook reads. Without it you'll see empty cards on most Q&A turns and on longer file-touching turns — Claude Code flushes the assistant's reply to the transcript after the Stop hook fires, so the post-hoc heuristic loses the race.
 
 ---
 
