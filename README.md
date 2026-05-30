@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>A log for vibe coding.</b><br/>
-  Every prompt, every edit, every drift — recorded.
+  Every prompt the agent answered, every file it touched, on one page.
 </p>
 
 <p align="center">
@@ -21,24 +21,15 @@
 
 ## What it is
 
-A small dashboard that watches your AI coding sessions.
+A small dashboard that records every assistant turn from your AI coding sessions and shows them as a list. Click a prompt to see what the agent said back, which files it touched, and the diff for each one.
 
-It records what the agent did (prompts, file edits, replies), shows what you've changed manually that's not yet committed, and surfaces the moments two coding sessions or you-and-the-agent stepped on each other.
-
-There's no daemon, no DB, no telemetry. It writes plain JSONL into `.sync/` next to your repo, reads `git status`, and serves a single page on `localhost:7100`.
+No daemon, no DB, no telemetry. It writes plain JSONL into `.sync/` next to your repo and serves a single page on `localhost:7100`.
 
 ---
 
 ## Why
 
-If you let an agent move fast in your repo, you stop remembering what it touched. You lose the receipts. vibelog gives them back.
-
-Common things it catches:
-
-- The agent rewrote a file you'd been editing in your IDE and didn't tell you.
-- Another `claude` session on the same project touched the same file you're working on.
-- You hand-edited `.env` and forgot — vibelog still shows it as drift.
-- You want to look back at "what did I ask 3 hours ago?" — every prompt is there.
+If you let an agent move fast, you stop remembering what it touched. vibelog gives you the receipts: every prompt you sent, every reply, every file edited, kept in chronological order so you can scroll back and audit a session the same way you'd `git log`.
 
 ---
 
@@ -81,13 +72,13 @@ Add this to `~/.claude/settings.json`:
 
 If `vibelog` isn't on the PATH that Claude Code spawns hooks with, use the absolute path: `/Users/you/go/bin/vibelog observe`.
 
-### (Optional) MCP server for deterministic teach-backs
+### (Recommended) MCP server for deterministic teach-backs
 
 ```bash
 claude mcp add vibelog vibelog mcp
 ```
 
-This gives the agent a `set_implementation` tool. When it calls it, the curated summary + response text are saved during the turn, which sidesteps the Claude-Code-flushes-the-transcript-after-the-Stop-hook race. Without it, vibelog falls back to reading the last assistant text block from the transcript.
+This registers a `set_implementation` tool. When the agent calls it, the curated summary + response text are saved *during* the turn — sidestepping the race where Claude Code flushes the assistant's reply to the transcript after the Stop hook has already read it. Without this, vibelog falls back to a transcript-tail heuristic that loses on longer Q&A turns.
 
 ---
 
@@ -100,40 +91,28 @@ This gives the agent a `set_implementation` tool. When it calls it, the curated 
                            │ Stop hook
                            ▼
                   ┌─────────────────┐
-                  │  vibelog observe│
-                  └────────┬────────┘
-                           │ writes one row
-                           ▼
-              .sync/iterations.jsonl  (append-only)
-                           │
-                           ▼
-                  ┌─────────────────┐    git status
-                  │  vibelog serve  │◀────────────── working tree
-                  └────────┬────────┘
-                           │ HTTP
-                           ▼
-                http://localhost:7100
+                  │  vibelog observe│ ── writes one row ─▶ .sync/iterations.jsonl
+                  └─────────────────┘
+                                              │
+                                              ▼
+                                     ┌─────────────────┐
+                                     │  vibelog serve  │
+                                     └────────┬────────┘
+                                              │ HTTP
+                                              ▼
+                                    http://localhost:7100
 ```
 
-Three data sources, one feed:
+Every assistant turn becomes one row in `.sync/iterations.jsonl` and one card on the dashboard. The card expands progressively:
 
-| Source | What it gives |
+| Tap | Reveals |
 | --- | --- |
-| Stop hook | One row per assistant turn — prompt, edits, response |
-| `git status` | The leading drift card: files you changed that the agent didn't |
-| `git log` (one-shot) | Commits, shown as nodes in the timeline |
+| **L0** | The user prompt + a one-line subtitle of what the agent did |
+| **L1** | `show response` (Q&A) or `show implementation` (file-touching) — the curated teach-back |
+| **L2** | `show files touched` — paths the agent edited this turn |
+| **L3** | `show diffs` — per-file unified diff vs the snapshot from the previous touch |
 
----
-
-## What you see
-
-| Element | When it shows |
-| --- | --- |
-| **Leading drift card** | Whenever uncommitted files exist that the agent isn't responsible for |
-| **Prompt card** | One per assistant turn. Expands to: response → files touched → per-file diff |
-| `⚠ overwrites external edit` | An agent turn wrote over a file you'd manually changed |
-| `⇄ interleaved with another session` | Another `claude` session in this repo touched the same file |
-| **Commit nodes** | Every git commit in the timeline, clickable for `git show` |
+The data is plain JSONL. You can `cat .sync/iterations.jsonl | jq` it any time.
 
 ---
 
@@ -144,23 +123,23 @@ cmd/vibelog/                CLI: init, mcp, observe, serve, watch, ingest-git
 internal/
 ├── model/                  Iteration, Anchor — typed schema
 ├── store/                  reads .sync/ — tolerant of unknown row kinds
-├── observecmd/             Stop-hook handler
-├── mcpserver/              MCP tools (set_implementation, record_iteration, …)
+├── observecmd/             Stop-hook handler (transcript → row)
+├── mcpserver/              MCP tools (set_implementation, …)
 ├── serve/                  HTTP server + embedded UI
-├── gitstatus/              git-status-based drift detector
-├── gitcmd/                 ingest-git for commit rows
-└── untrackedstore/         history of untracked-but-modified files (.env etc.)
-.sync/                      per-project state (gitignore this)
-├── anchor.yaml
-├── iterations.jsonl
-└── snapshots/iter-N/...
+├── gitcmd/                 walks git log (optional ingest-git subcommand)
+├── initcmd/                scaffolds .sync/
+└── watchcmd/               tails .sync/iterations.jsonl in the terminal
+.sync/                      per-project state (add to .gitignore)
+├── anchor.yaml             project intent — optional, mostly informational
+├── iterations.jsonl        one row per assistant turn
+└── snapshots/iter-N/...    file contents at iter N (used by the diff endpoint)
 ```
 
 ---
 
 ## Status
 
-Early. Daily-driven by the author against `claude code` on a Mac. Codex adapter and git-tree snapshots are on the roadmap but not built. Issues and PRs welcome.
+Early. Daily-driven by the author against `claude code` on a Mac. Codex support, manual-edit drift detection, and git-tree snapshots are in the design pile but not in the binary yet. Issues and PRs welcome.
 
 ---
 
