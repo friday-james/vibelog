@@ -78,11 +78,11 @@ vibelog serve &     # dashboard on http://localhost:7100
 
 ### Multiple projects on one dashboard (opt-in)
 
-By default `vibelog serve` shows the one project rooted at `cwd` (or the path you pass). One project per serve, one serve per port. Run one for each repo if that's what you want:
+By default `vibelog serve` shows the one project rooted at `cwd` (or the path you pass). One project per serve. If `:7100` is already taken, it auto-bumps to the next free port (`:7101`, `:7102`, ...) and prints the actual URL, so you can just type `vibelog serve` in every repo and never deal with port collisions:
 
 ```bash
-cd /Users/you/code/vibelog && vibelog serve &           # → :7100
-cd /Users/you/code/ledger  && vibelog serve -port 7101 & # → :7101
+cd /Users/you/code/vibelog && vibelog serve &   # → http://localhost:7100
+cd /Users/you/code/ledger  && vibelog serve &   # → http://localhost:7101 (7100 taken)
 ```
 
 If you'd rather see several repos on one page with a tab strip, opt into multi-project mode explicitly. Either inline:

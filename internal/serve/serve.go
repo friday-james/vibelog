@@ -150,11 +150,56 @@ func isHexSHA(s string) bool {
 	return true
 }
 
-// Run starts a blocking HTTP server. Listens on addr (e.g. "localhost:7100").
-func Run(projectDir, addr string) error {
+// Run starts a blocking HTTP server. Listens on preferredAddr (e.g.
+// "localhost:7100"); if that port is taken, walks up to the next 20 ports
+// looking for a free one. Prints the actual bind to stdout so the user knows
+// where the dashboard came up. This lets `vibelog serve` "just work" when
+// another vibelog process is already on :7100.
+func Run(projectDir, preferredAddr string) error {
 	h, err := Handler(projectDir)
 	if err != nil {
 		return err
 	}
-	return http.ListenAndServe(addr, h)
+	ln, actual, err := listenWithFallback(preferredAddr, 20)
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+	fmt.Printf("vibelog serving %s on http://%s\n", projectDir, actual)
+	return http.Serve(ln, h)
+}
+
+// listenWithFallback tries preferred first; on "address already in use" it
+// walks the next `attempts-1` ports. Returns the listener and the actual
+// host:port string. Errors other than "in use" are returned immediately.
+func listenWithFallback(preferred string, attempts int) (net.Listener, string, error) {
+	host, portStr, err := net.SplitHostPort(preferred)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse %q: %w", preferred, err)
+	}
+	startPort, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse port %q: %w", portStr, err)
+	}
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		addr := net.JoinHostPort(host, strconv.Itoa(startPort+i))
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			return ln, addr, nil
+		}
+		lastErr = err
+		if !isAddrInUse(err) {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("no free port in [%d, %d): %w", startPort, startPort+attempts, lastErr)
+}
+
+func isAddrInUse(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "address already in use") || strings.Contains(s, "Only one usage of each socket address")
 }

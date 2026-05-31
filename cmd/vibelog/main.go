@@ -165,8 +165,9 @@ func runServe(args []string) {
 		return
 	}
 
-	// Single-project fallback (preserves the pre-multi behavior). Used when
-	// the user hasn't declared any projects via flag or config.
+	// Single-project mode (default). serve.Run prints the actual bind addr
+	// once the listener is up — including any port-fallback we had to do
+	// because the preferred port was taken.
 	var dir string
 	if fs.NArg() > 0 {
 		dir = fs.Arg(0)
@@ -178,7 +179,6 @@ func runServe(args []string) {
 		}
 		dir = cwd
 	}
-	fmt.Printf("vibelog serving %s on http://%s\n", dir, addr)
 	if err := serve.Run(dir, addr); err != nil {
 		fmt.Fprintln(os.Stderr, "vibelog serve:", err)
 		os.Exit(1)
@@ -187,12 +187,7 @@ func runServe(args []string) {
 
 func runMulti(projects []serve.Project, src, addr, srcKind string) {
 	if srcKind == "config" {
-		fmt.Printf("vibelog serving %d projects from %s on http://%s\n", len(projects), src, addr)
-	} else {
-		fmt.Printf("vibelog serving %d projects on http://%s\n", len(projects), addr)
-	}
-	for _, p := range projects {
-		fmt.Printf("  /p/%s/  →  %s\n", p.Name, p.Path)
+		fmt.Printf("vibelog: %d projects loaded from %s\n", len(projects), src)
 	}
 	if err := serve.RunMulti(projects, addr); err != nil {
 		fmt.Fprintln(os.Stderr, "vibelog serve:", err)

@@ -155,11 +155,21 @@ func MultiHandler(projects []Project) (http.Handler, error) {
 	return mux, nil
 }
 
-// RunMulti is the multi-project counterpart of Run. Blocks.
-func RunMulti(projects []Project, addr string) error {
+// RunMulti is the multi-project counterpart of Run. Same port-fallback
+// behavior: if the preferred port is taken, walk up to the next 20.
+func RunMulti(projects []Project, preferredAddr string) error {
 	h, err := MultiHandler(projects)
 	if err != nil {
 		return err
 	}
-	return http.ListenAndServe(addr, h)
+	ln, actual, err := listenWithFallback(preferredAddr, 20)
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+	fmt.Printf("vibelog serving %d projects on http://%s\n", len(projects), actual)
+	for _, p := range projects {
+		fmt.Printf("  /p/%s/  →  %s\n", p.Name, p.Path)
+	}
+	return http.Serve(ln, h)
 }
