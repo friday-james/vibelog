@@ -88,6 +88,11 @@ now:
 }
 
 func TestLoad_MalformedJSONL(t *testing.T) {
+	// readJSONL is intentionally tolerant: a row that fails to parse OR fails
+	// per-row Validate is logged to stderr and skipped, not surfaced as a
+	// load error. This keeps older binaries from crashing on rows written by
+	// a newer schema-extending binary. The test confirms a malformed row is
+	// dropped and the rest of the load succeeds.
 	tmp := t.TempDir()
 	syncDir := filepath.Join(tmp, ".sync")
 	os.MkdirAll(syncDir, 0o755)
@@ -109,11 +114,11 @@ now:
 	os.WriteFile(filepath.Join(syncDir, "claims.yaml"), []byte("[]"), 0o644)
 	os.WriteFile(filepath.Join(syncDir, "iterations.jsonl"), []byte("{not valid json\n"), 0o644)
 
-	_, err := store.Load(tmp)
-	if err == nil {
-		t.Fatal("expected parse error")
+	state, err := store.Load(tmp)
+	if err != nil {
+		t.Fatalf("expected tolerant load to succeed (bad row should be skipped), got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "line 1") {
-		t.Errorf("expected line-numbered error, got %v", err)
+	if len(state.Iterations) != 0 {
+		t.Errorf("expected 0 iterations after skipping the malformed row, got %d", len(state.Iterations))
 	}
 }

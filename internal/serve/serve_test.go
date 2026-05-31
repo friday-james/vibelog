@@ -69,8 +69,8 @@ func TestHandler_IndexHTML(t *testing.T) {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "COCKPIT") {
-		t.Errorf("expected COCKPIT brand in index.html, got first 200 bytes: %q", string(body)[:min(200, len(body))])
+	if !strings.Contains(string(body), "VIBELOG") {
+		t.Errorf("expected VIBELOG brand in index.html, got first 200 bytes: %q", string(body)[:min(200, len(body))])
 	}
 }
 
