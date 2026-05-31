@@ -16,7 +16,7 @@ let concurrencyIndex = {};
 
 async function load() {
   try {
-    const r = await fetch('/state.json');
+    const r = await fetch('state.json');
     if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
     const s = await r.json();
     currentState = s;
@@ -467,7 +467,7 @@ async function loadFileDiff(detailsEl) {
   const iterId = diffEl.dataset.iterId;
   diffEl.innerHTML = `<div class="diff-head">loading…</div>`;
   try {
-    const r = await fetch(`/prompt/${encodeURIComponent(iterId)}/diff?path=${encodeURIComponent(path)}`);
+    const r = await fetch(`prompt/${encodeURIComponent(iterId)}/diff?path=${encodeURIComponent(path)}`);
     const text = await r.text();
     if (r.status === 404) {
       diffEl.innerHTML = `<div class="diff-head">${escapeHTML(path)}</div><pre><span class="ctx">${escapeHTML(text)}</span></pre>`;
@@ -662,6 +662,40 @@ function tickTimestamps() {
   if (currentState) setStatus('synced', syncStateText(currentState));
 }
 
+// Multi-project switcher: probe /projects.json at startup. Single-project mode
+// returns 404 and the switcher stays hidden. Multi-project mode populates a
+// <select> in the header; switching navigates to the chosen /p/<name>/.
+async function setupProjectSwitcher() {
+  try {
+    const r = await fetch('/projects.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    const projects = await r.json();
+    if (!Array.isArray(projects) || projects.length === 0) return;
+    const el = document.getElementById('projSwitcher');
+    if (!el) return;
+    // Current project = path segment after /p/
+    const m = location.pathname.match(/^\/p\/([^/]+)\//);
+    const current = m ? m[1] : '';
+    const sel = document.createElement('select');
+    sel.className = 'proj-select';
+    sel.setAttribute('aria-label', 'project');
+    for (const p of projects) {
+      const opt = document.createElement('option');
+      opt.value = p.name;
+      opt.textContent = p.name;
+      if (p.name === current) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener('change', () => {
+      const name = sel.value;
+      if (name && name !== current) location.assign(`/p/${encodeURIComponent(name)}/`);
+    });
+    el.appendChild(sel);
+    el.hidden = false;
+  } catch (_) { /* single-project mode; ignore */ }
+}
+
+setupProjectSwitcher();
 load();
 setInterval(load, 2000);
 setInterval(tickTimestamps, 1000);

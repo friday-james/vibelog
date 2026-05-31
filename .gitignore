@@ -1,6 +1,6 @@
-.env
-.sync/local/
 *.tmp
+.env
+.sync/
 /cockpit
 build-artifacts/
 cockpit

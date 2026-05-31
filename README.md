@@ -76,6 +76,32 @@ vibelog init        # creates .sync/ skeleton
 vibelog serve &     # dashboard on http://localhost:7100
 ```
 
+### Multiple projects on one dashboard
+
+`vibelog serve` from a parent directory auto-discovers every child project that has a `.sync/anchor.yaml` and mounts them under `/p/<name>/` on a single dashboard. The header switcher routes between them; the Stop hook still routes each turn into the right project's `.sync/` automatically.
+
+```bash
+cd ~/code           # any dir containing initialized vibelog projects
+vibelog serve       # → http://localhost:7100, header switcher per project
+```
+
+If you want explicit control instead of discovery, declare projects at `~/.vibelog/projects.yaml`:
+
+```yaml
+- name: vibelog
+  path: /Users/you/code/vibelog
+- name: ledger
+  path: /Users/you/code/ledger
+```
+
+Or inline:
+
+```bash
+vibelog serve -projects "vibelog=/Users/you/code/vibelog,ledger=/Users/you/code/ledger"
+```
+
+Resolution order: `-projects` flag → `~/.vibelog/projects.yaml` → auto-discover from `cwd`. Single-project mode (the pre-multi behavior) still works when discovery finds exactly one.
+
 ### Wire the Stop hook (records every assistant turn)
 
 Add this to `~/.claude/settings.json`:
@@ -169,3 +195,9 @@ Early. Daily-driven by the author against `claude code` on Unix. Codex support i
 ## License
 
 MIT.
+
+---
+
+## Releases
+
+Tagged releases publish binaries for linux/macOS × amd64/arm64 to https://github.com/friday-james/vibelog/releases. Built by goreleaser via `.github/workflows/release.yml` on every `v*` tag.
