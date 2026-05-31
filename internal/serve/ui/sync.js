@@ -671,7 +671,7 @@ async function setupProjectSwitcher() {
     const r = await fetch('/projects.json', { cache: 'no-store' });
     if (!r.ok) return;
     const projects = await r.json();
-    if (!Array.isArray(projects) || projects.length === 0) return;
+    if (!Array.isArray(projects) || projects.length < 2) return;  // 1 project = no tab strip clutter
     const el = document.getElementById('projSwitcher');
     if (!el) return;
     const m = location.pathname.match(/^\/p\/([^/]+)\//);

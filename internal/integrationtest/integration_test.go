@@ -6,6 +6,7 @@
 package integrationtest
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/friday-james/vibelog/internal/initcmd"
 	"github.com/friday-james/vibelog/internal/mcpserver"
@@ -397,6 +399,70 @@ func TestE2E_MultiProjectServeRoutesPerProject(t *testing.T) {
 	}
 }
 
+
+// ---------- Test 5: lease lifecycle ----------
+
+func TestE2E_LeaseAddsAndCancelRemoves(t *testing.T) {
+	seed := initProject(t)
+	srv, err := serve.NewMultiServer([]serve.Project{{Name: "seed", Path: seed}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	// Open a lease for a second project in the background.
+	leaseProj := serve.Project{Name: "leased", Path: initProject(t)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	leaseErr := make(chan error, 1)
+	go func() {
+		leaseErr <- serve.LeaseProject(ctx, strings.TrimPrefix(ts.URL, "http://"), leaseProj)
+	}()
+
+	// Poll /projects.json until 2 entries appear (the lease registered).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r, err := http.Get(ts.URL + "/projects.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ps []serve.Project
+		_ = json.NewDecoder(r.Body).Decode(&ps)
+		r.Body.Close()
+		if len(ps) == 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	r, _ := http.Get(ts.URL + "/projects.json")
+	var ps []serve.Project
+	_ = json.NewDecoder(r.Body).Decode(&ps)
+	r.Body.Close()
+	if len(ps) != 2 {
+		t.Fatalf("expected 2 projects while lease is open, got %d (%+v)", len(ps), ps)
+	}
+
+	// Cancel the lease (simulates Ctrl+C on the leasing process). Server
+	// should detect the disconnect and remove the project.
+	cancel()
+	<-leaseErr
+
+	// Poll until the lease drops out.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r, _ = http.Get(ts.URL + "/projects.json")
+		_ = json.NewDecoder(r.Body).Decode(&ps)
+		r.Body.Close()
+		if len(ps) == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(ps) != 1 || ps[0].Name != "seed" {
+		t.Errorf("expected only the seed project after lease cancel, got %+v", ps)
+	}
+}
 
 // ---------- helpers ----------
 

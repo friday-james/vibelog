@@ -76,36 +76,36 @@ vibelog init        # creates .sync/ skeleton
 vibelog serve &     # dashboard on http://localhost:7100
 ```
 
-### Multiple projects on one dashboard (opt-in)
+### Multiple projects on one dashboard (leases)
 
-By default `vibelog serve` shows the one project rooted at `cwd` (or the path you pass). One project per serve. If `:7100` is already taken, it auto-bumps to the next free port (`:7101`, `:7102`, ...) and prints the actual URL, so you can just type `vibelog serve` in every repo and never deal with port collisions:
-
-```bash
-cd /Users/you/code/vibelog && vibelog serve &   # → http://localhost:7100
-cd /Users/you/code/ledger  && vibelog serve &   # → http://localhost:7101 (7100 taken)
-```
-
-If you'd rather see several repos on one page with a tab strip, opt into multi-project mode explicitly. Either inline:
+Just type `vibelog serve` in any repo. The first one starts the dashboard at `localhost:7100` with the current repo as the only tab. Every subsequent `vibelog serve` in another repo detects the running dashboard and **opens a lease** for the new repo, which appears as another tab. The lease lives only as long as that process does: `Ctrl+C` it and the tab disappears.
 
 ```bash
-vibelog serve -projects "vibelog=/Users/you/code/vibelog,ledger=/Users/you/code/ledger"
+# terminal 1
+cd ~/code/vibelog && vibelog serve
+# vibelog serving on http://localhost:7100
+#   /p/vibelog/  →  /Users/you/code/vibelog
+
+# terminal 2
+cd ~/code/ledger && vibelog serve
+# vibelog: leased ledger with running serve at http://localhost:7100
+#   → http://localhost:7100/p/ledger/   (Ctrl+C to deregister)
+
+# now http://localhost:7100 has two tabs: vibelog, ledger
+# Ctrl+C terminal 2 → ledger tab disappears
+# Ctrl+C terminal 1 → the whole dashboard goes away
 ```
 
-Or via a config file you pass with `-config`:
+No config file, no flag flips. Each `vibelog serve` is a long-running process you can cancel cleanly. The Stop hook routes each assistant turn into the right project's `.sync/` based on cwd, so the tabs always show *current* leases.
 
-```yaml
-# ~/.vibelog/projects.yaml (or any path you like)
-- name: vibelog
-  path: /Users/you/code/vibelog
-- name: ledger
-  path: /Users/you/code/ledger
-```
+**Static modes (for CI or fixed setups)** — bypass the lease dance with either flag:
 
 ```bash
-vibelog serve -config ~/.vibelog/projects.yaml
+vibelog serve -projects "vibelog=/path/a,ledger=/path/b"
+vibelog serve -config /path/to/projects.yaml
 ```
 
-Multi-project mode is never auto-loaded. The Stop hook routes each assistant turn into the right project's `.sync/` based on cwd either way, so you can switch between the per-serve and one-serve approaches without re-wiring anything.
+These bind a fixed project list at startup. No leasing, no auto-deregister.
 
 ### Wire the Stop hook (records every assistant turn)
 

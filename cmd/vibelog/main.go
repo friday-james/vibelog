@@ -1,13 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/friday-james/vibelog/internal/gitcmd"
 	"github.com/friday-james/vibelog/internal/initcmd"
@@ -136,38 +138,44 @@ func runWatch(args []string) {
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := fs.Int("port", 7100, "port to listen on")
-	projectsFlag := fs.String("projects", "", "comma-separated multi-project list: name=dir,name2=dir2")
-	configFlag := fs.String("config", "", "path to projects config (YAML list of {name, path}). Multi-project mode is opt-in — leave empty to serve just one project")
+	projectsFlag := fs.String("projects", "", "comma-separated multi-project list: name=dir,name2=dir2 (no auto-register)")
+	configFlag := fs.String("config", "", "path to projects config (YAML list of {name, path}); read-only snapshot, no auto-register")
 	fs.Parse(args)
 
 	addr := fmt.Sprintf("localhost:%d", *port)
 
-	// Resolution order: -projects flag → config file → single-project (cwd or arg).
+	// Explicit modes: -projects flag and -config file bypass the auto-register
+	// dance. Useful for CI or for serving a fixed list without persisting.
 	if projects, err := serve.ParseProjectsFlag(*projectsFlag); err != nil {
 		fmt.Fprintln(os.Stderr, "vibelog serve: -projects:", err)
 		os.Exit(1)
 	} else if len(projects) > 0 {
-		runMulti(projects, *configFlag, addr, "flag")
+		if err := serve.RunMulti(projects, addr); err != nil {
+			fmt.Fprintln(os.Stderr, "vibelog serve:", err)
+			os.Exit(1)
+		}
 		return
 	}
-
 	if *configFlag != "" {
 		projects, err := serve.LoadProjectsConfig(*configFlag)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "vibelog serve: config:", err)
+			fmt.Fprintln(os.Stderr, "vibelog serve: -config:", err)
 			os.Exit(1)
 		}
 		if len(projects) == 0 {
 			fmt.Fprintln(os.Stderr, "vibelog serve: -config:", *configFlag, "has no project entries")
 			os.Exit(1)
 		}
-		runMulti(projects, *configFlag, addr, "config")
+		fmt.Printf("vibelog: %d projects loaded from %s\n", len(projects), *configFlag)
+		if err := serve.RunMulti(projects, addr); err != nil {
+			fmt.Fprintln(os.Stderr, "vibelog serve:", err)
+			os.Exit(1)
+		}
 		return
 	}
 
-	// Single-project mode (default). serve.Run prints the actual bind addr
-	// once the listener is up — including any port-fallback we had to do
-	// because the preferred port was taken.
+	// Default behavior: resolve this invocation's project, then either register
+	// with a running vibelog or start a fresh server.
 	var dir string
 	if fs.NArg() > 0 {
 		dir = fs.Arg(0)
@@ -179,17 +187,31 @@ func runServe(args []string) {
 		}
 		dir = cwd
 	}
-	if err := serve.Run(dir, addr); err != nil {
-		fmt.Fprintln(os.Stderr, "vibelog serve:", err)
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "vibelog serve: abs path:", err)
 		os.Exit(1)
 	}
-}
+	project := serve.Project{Name: filepath.Base(absDir), Path: absDir}
 
-func runMulti(projects []serve.Project, src, addr, srcKind string) {
-	if srcKind == "config" {
-		fmt.Printf("vibelog: %d projects loaded from %s\n", len(projects), src)
+	// Is another vibelog already running on this addr? If so, open a long-lived
+	// lease — the project stays registered as long as THIS process stays alive.
+	// Ctrl+C drops the connection, server deregisters automatically.
+	if serve.ProbeRunning(addr) {
+		fmt.Printf("vibelog: leased %s with running serve at http://%s\n", project.Name, addr)
+		fmt.Printf("  → http://%s/p/%s/   (Ctrl+C to deregister)\n", addr, project.Name)
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		if err := serve.LeaseProject(ctx, addr, project); err != nil && ctx.Err() == nil {
+			fmt.Fprintln(os.Stderr, "vibelog serve:", err)
+			os.Exit(1)
+		}
+		fmt.Println("vibelog: lease released")
+		return
 	}
-	if err := serve.RunMulti(projects, addr); err != nil {
+
+	// Nothing running. Start a fresh serve with this project as the seed.
+	if err := serve.RunMulti([]serve.Project{project}, addr); err != nil {
 		fmt.Fprintln(os.Stderr, "vibelog serve:", err)
 		os.Exit(1)
 	}
