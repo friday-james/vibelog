@@ -162,7 +162,7 @@ internal/
 
 ## Status
 
-Early. Daily-driven by the author against `claude code` on a Mac. Codex support, manual-edit drift detection, and git-tree snapshots are in the design pile but not in the binary yet. Issues and PRs welcome.
+Early. Daily-driven by the author against `claude code` on macOS (Linux probably works, untested). Codex support is in the design pile. Issues and PRs welcome.
 
 ---
 
