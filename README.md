@@ -101,7 +101,7 @@ If `vibelog` isn't on the PATH that Claude Code spawns hooks with, use the absol
 claude mcp add vibelog vibelog mcp
 ```
 
-This registers a `set_implementation` tool the agent calls at the end of every turn. The curated summary + response text are saved *during* the turn, so they're guaranteed to be there when the Stop hook reads. Without it you'll see empty cards on most Q&A turns and on longer file-touching turns — Claude Code flushes the assistant's reply to the transcript after the Stop hook fires, so the post-hoc heuristic loses the race.
+This registers a `set_implementation` tool the agent calls at the end of every turn. The curated summary + response text are saved *during* the turn, so they're guaranteed to be there when the Stop hook reads. Without it you'll see empty cards on most Q&A turns and on longer file-touching turns. Claude Code flushes the assistant's reply to the transcript after the Stop hook fires, so the post-hoc heuristic loses the race.
 
 ---
 
@@ -131,9 +131,9 @@ Every assistant turn becomes one row in `.sync/iterations.jsonl` and one card on
 | Tap | Reveals |
 | --- | --- |
 | **L0** | The user prompt + a one-line subtitle of what the agent did |
-| **L1** | `show response` (Q&A) or `show implementation` (file-touching) — the curated teach-back |
-| **L2** | `show files touched` — paths the agent edited this turn |
-| **L3** | `show diffs` — per-file unified diff vs the snapshot from the previous touch |
+| **L1** | `show response` (Q&A) or `show implementation` (file-touching). The curated teach-back. |
+| **L2** | `show files touched`. Paths the agent edited this turn. |
+| **L3** | `show diffs`. Per-file unified diff vs the snapshot from the previous touch. |
 
 The data is plain JSONL. You can `cat .sync/iterations.jsonl | jq` it any time.
 
@@ -144,8 +144,8 @@ The data is plain JSONL. You can `cat .sync/iterations.jsonl | jq` it any time.
 ```
 cmd/vibelog/                CLI: init, mcp, observe, serve, watch, ingest-git
 internal/
-├── model/                  Iteration, Anchor — typed schema
-├── store/                  reads .sync/ — tolerant of unknown row kinds
+├── model/                  Iteration, Anchor (typed schema)
+├── store/                  reads .sync/, tolerant of unknown row kinds
 ├── observecmd/             Stop-hook handler (transcript → row)
 ├── mcpserver/              MCP tools (set_implementation, …)
 ├── serve/                  HTTP server + embedded UI
@@ -153,7 +153,7 @@ internal/
 ├── initcmd/                scaffolds .sync/
 └── watchcmd/               tails .sync/iterations.jsonl in the terminal
 .sync/                      per-project state (add to .gitignore)
-├── anchor.yaml             project intent — optional, mostly informational
+├── anchor.yaml             project intent (optional, mostly informational)
 ├── iterations.jsonl        one row per assistant turn
 └── snapshots/iter-N/...    file contents at iter N (used by the diff endpoint)
 ```
