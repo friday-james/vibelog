@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"vibelog/internal/mcpserver"
+	"github.com/friday-james/vibelog/internal/mcpserver"
 )
 
 // dbg appends a diagnostic line to /tmp/vibelog-observe.log so we can see
@@ -97,7 +97,7 @@ func Run(projectDir string) error {
 	}
 
 	if _, err := os.Stat(filepath.Join(projectDir, ".sync", "anchor.yaml")); errors.Is(err, fs.ErrNotExist) {
-		dbg("project %q lacks .sync/anchor.yaml → silent skip (not a cockpit project)", projectDir)
+		dbg("project %q lacks .sync/anchor.yaml → silent skip (not a vibelog project)", projectDir)
 		return nil
 	} else if err != nil {
 		dbg("stat anchor failed: %v", err)
@@ -518,7 +518,7 @@ func extractUserPromptText(message json.RawMessage) (string, bool) {
 // root and returns the LONGEST suffix that exists as a file under projectDir.
 // Used when filepath.Rel says the input escapes projectDir (e.g. the agent's
 // transcript carries an absolute path from before the project was renamed).
-// Example: projectDir="/foo/vibelog" and p="/foo/cockpit/internal/x.go" →
+// Example: projectDir="/foo/new-name" and p="/foo/old-name/internal/x.go" →
 // returns ("internal/x.go", true) because /foo/vibelog/internal/x.go exists.
 func suffixUnderProject(projectDir, p string) (string, bool) {
 	// Normalize to forward slashes, then split.

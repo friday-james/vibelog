@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"vibelog/internal/model"
-	"vibelog/internal/store"
+	"github.com/friday-james/vibelog/internal/model"
+	"github.com/friday-james/vibelog/internal/store"
 )
 
 // Result reports what ingest-git did.

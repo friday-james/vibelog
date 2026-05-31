@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"vibelog/internal/initcmd"
-	"vibelog/internal/serve"
+	"github.com/friday-james/vibelog/internal/initcmd"
+	"github.com/friday-james/vibelog/internal/serve"
 )
 
 func TestHandler_StateEndpoint(t *testing.T) {

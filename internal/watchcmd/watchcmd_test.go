@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"vibelog/internal/watchcmd"
+	"github.com/friday-james/vibelog/internal/watchcmd"
 )
 
 func TestFormat_IterationFull(t *testing.T) {
-	line := `{"id":2,"ts":"2026-05-28T04:16:40Z","kind":"iteration","summary":"end-to-end MCP smoke test","files_changed":["a.go","b.go"],"claims_added":["alpha"],"claims_violated":["beta"],"agent":"claude-code"}`
+	line := `{"id":2,"ts":"2026-05-28T04:16:40Z","kind":"iteration","summary":"end-to-end MCP smoke test","files_changed":["a.go","b.go"],"agent":"claude-code"}`
 	out := watchcmd.Format(line)
 	if !strings.Contains(out, "#2") {
 		t.Errorf("missing id: %q", out)
@@ -21,12 +21,6 @@ func TestFormat_IterationFull(t *testing.T) {
 	}
 	if !strings.Contains(out, "a.go, b.go") {
 		t.Errorf("files not rendered: %q", out)
-	}
-	if !strings.Contains(out, "+alpha") {
-		t.Errorf("claims_added not rendered: %q", out)
-	}
-	if !strings.Contains(out, "✗beta") {
-		t.Errorf("claims_violated not rendered: %q", out)
 	}
 }
 

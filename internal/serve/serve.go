@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"vibelog/internal/store"
+	"github.com/friday-james/vibelog/internal/store"
 )
 
 //go:embed ui

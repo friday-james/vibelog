@@ -8,7 +8,6 @@ import (
 // State is the in-memory union of everything under .sync/.
 type State struct {
 	Anchor     Anchor      `json:"anchor"`
-	Claims     []Claim     `json:"claims"`
 	Iterations []Iteration `json:"iterations"`
 	// CurrentDrift is computed live by the /state.json handler from
 	// `git status` minus agent-owned files. Never persisted to .sync/.
@@ -36,16 +35,6 @@ type DriftFile struct {
 func (s *State) Validate() error {
 	if err := s.Anchor.Validate(); err != nil {
 		return fmt.Errorf("anchor: %w", err)
-	}
-	seenClaim := make(map[string]bool, len(s.Claims))
-	for _, c := range s.Claims {
-		if seenClaim[c.ID] {
-			return fmt.Errorf("duplicate claim id %q", c.ID)
-		}
-		seenClaim[c.ID] = true
-		if err := c.Validate(); err != nil {
-			return err
-		}
 	}
 	type entryKey struct {
 		kind IterationKind
@@ -149,80 +138,6 @@ func (n *Now) Validate() error {
 	return nil
 }
 
-// ----- Claim -----
-
-type ClaimCategory string
-
-const (
-	CategoryInvariant   ClaimCategory = "invariant"
-	CategoryContract    ClaimCategory = "contract"
-	CategoryFailureMode ClaimCategory = "failure-mode"
-	CategoryAssumption  ClaimCategory = "assumption"
-)
-
-type ClaimStatus string
-
-const (
-	StatusUnknown   ClaimStatus = "unknown"
-	StatusSuspected ClaimStatus = "suspected"
-	StatusHolding   ClaimStatus = "holding"
-	StatusViolated  ClaimStatus = "violated"
-)
-
-type Severity string
-
-const (
-	SeverityLow  Severity = "low"
-	SeverityMed  Severity = "med"
-	SeverityHigh Severity = "high"
-)
-
-type Claim struct {
-	ID                     string        `yaml:"id" json:"id"`
-	Statement              string        `yaml:"statement" json:"statement"`
-	Category               ClaimCategory `yaml:"category" json:"category"`
-	Status                 ClaimStatus   `yaml:"status" json:"status"`
-	Severity               Severity      `yaml:"severity" json:"severity"`
-	Evidence               []Evidence    `yaml:"evidence" json:"evidence"`
-	Established            time.Time     `yaml:"established" json:"established"`
-	EstablishedBy          string        `yaml:"established_by,omitempty" json:"established_by,omitempty"`
-	EstablishedInIteration int           `yaml:"established_in_iteration,omitempty" json:"established_in_iteration,omitempty"`
-	LastVerified           *time.Time    `yaml:"last_verified,omitempty" json:"last_verified,omitempty"`
-	RelatedClaims          []string      `yaml:"related_claims,omitempty" json:"related_claims,omitempty"`
-}
-
-func (c *Claim) Validate() error {
-	if c.ID == "" {
-		return fmt.Errorf("claim: id is required")
-	}
-	if c.Statement == "" {
-		return fmt.Errorf("claim %s: statement is required", c.ID)
-	}
-	switch c.Category {
-	case CategoryInvariant, CategoryContract, CategoryFailureMode, CategoryAssumption:
-	default:
-		return fmt.Errorf("claim %s: invalid category %q (want invariant|contract|failure-mode|assumption)", c.ID, c.Category)
-	}
-	switch c.Status {
-	case StatusUnknown, StatusSuspected, StatusHolding, StatusViolated:
-	default:
-		return fmt.Errorf("claim %s: invalid status %q (want unknown|suspected|holding|violated)", c.ID, c.Status)
-	}
-	switch c.Severity {
-	case SeverityLow, SeverityMed, SeverityHigh:
-	default:
-		return fmt.Errorf("claim %s: invalid severity %q (want low|med|high)", c.ID, c.Severity)
-	}
-	if len(c.Evidence) == 0 {
-		return fmt.Errorf("claim %s: must have at least one evidence entry (use type=missing if no positive evidence)", c.ID)
-	}
-	for i, ev := range c.Evidence {
-		if err := ev.Validate(); err != nil {
-			return fmt.Errorf("claim %s: evidence[%d]: %w", c.ID, i, err)
-		}
-	}
-	return nil
-}
 
 // ----- Evidence (discriminated union on Type) -----
 
@@ -346,8 +261,6 @@ type Iteration struct {
 	Kind           IterationKind `json:"kind"`
 	Summary        string        `json:"summary,omitempty"`
 	FilesChanged   []string      `json:"files_changed,omitempty"`
-	ClaimsAdded    []string      `json:"claims_added,omitempty"`
-	ClaimsViolated []string      `json:"claims_violated,omitempty"`
 	Agent          string        `json:"agent,omitempty"`
 	SessionID      string        `json:"session_id,omitempty"` // $CLAUDE_SESSION_ID for kind=iteration
 	SHA            string        `json:"sha,omitempty"`        // required for kind=commit

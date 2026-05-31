@@ -19,8 +19,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"vibelog/internal/model"
-	"vibelog/internal/store"
+	"github.com/friday-james/vibelog/internal/model"
+	"github.com/friday-james/vibelog/internal/store"
 )
 
 // RecordIterationArgs is the typed input for the record_iteration tool.

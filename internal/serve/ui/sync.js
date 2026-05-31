@@ -84,7 +84,7 @@ function render(s) {
 
   // v1 dashboard is prompts-only. Status banner, ANCHOR, CLAIMS sections,
   // and BLAST RADIUS are stripped for simplicity — their designs are saved
-  // in /Users/jai/.claude/projects/-Users-jai-Documents-ai-cockpit/memory/
+  // in /Users/jai/.claude/projects/-Users-jai-Documents-ai-vibelog/memory/
   // for revisit after the next compacted session.
   const allIters = s.iterations || [];
   // Prompts feed = iteration + external_edit, single linear timeline.

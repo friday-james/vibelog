@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"vibelog/internal/model"
+	"github.com/friday-james/vibelog/internal/model"
 )
 
 // Run tails projectDir/.sync/iterations.jsonl forever (or until stdin closes
@@ -88,16 +88,6 @@ func Format(line string) string {
 	}
 	if len(it.FilesChanged) > 0 {
 		fmt.Fprintf(&b, "\n        files:  %s", strings.Join(it.FilesChanged, ", "))
-	}
-	if len(it.ClaimsAdded) > 0 || len(it.ClaimsViolated) > 0 {
-		var parts []string
-		for _, c := range it.ClaimsAdded {
-			parts = append(parts, "+"+c)
-		}
-		for _, c := range it.ClaimsViolated {
-			parts = append(parts, "✗"+c)
-		}
-		fmt.Fprintf(&b, "\n        claims: %s", strings.Join(parts, "  "))
 	}
 	if it.SupersededAt != nil {
 		fmt.Fprintf(&b, "\n        SUPERSEDED (%s) at %s", it.SupersededReason, it.SupersededAt.Local().Format("15:04:05"))

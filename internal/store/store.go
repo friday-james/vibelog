@@ -13,7 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"vibelog/internal/model"
+	"github.com/friday-james/vibelog/internal/model"
 )
 
 // Load reads dir/.sync/{anchor.yaml, claims.yaml, iterations.jsonl} and
@@ -28,11 +28,6 @@ func Load(dir string) (*model.State, error) {
 		return nil, fmt.Errorf("anchor.yaml: %w", err)
 	}
 
-	var claims []model.Claim
-	if err := readYAML(filepath.Join(syncDir, "claims.yaml"), &claims); err != nil {
-		return nil, fmt.Errorf("claims.yaml: %w", err)
-	}
-
 	iterations, err := readJSONL(filepath.Join(syncDir, "iterations.jsonl"))
 	if err != nil {
 		return nil, fmt.Errorf("iterations.jsonl: %w", err)
@@ -40,7 +35,6 @@ func Load(dir string) (*model.State, error) {
 
 	state := &model.State{
 		Anchor:     anchor,
-		Claims:     claims,
 		Iterations: iterations,
 	}
 	if err := state.Validate(); err != nil {

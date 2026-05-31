@@ -15,10 +15,10 @@ import (
 	"strings"
 	"testing"
 
-	"vibelog/internal/initcmd"
-	"vibelog/internal/mcpserver"
-	"vibelog/internal/observecmd"
-	"vibelog/internal/serve"
+	"github.com/friday-james/vibelog/internal/initcmd"
+	"github.com/friday-james/vibelog/internal/mcpserver"
+	"github.com/friday-james/vibelog/internal/observecmd"
+	"github.com/friday-james/vibelog/internal/serve"
 )
 
 // initProject scaffolds a vibelog .sync/ skeleton in a fresh tmp dir and

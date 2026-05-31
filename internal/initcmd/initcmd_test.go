@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"vibelog/internal/initcmd"
-	"vibelog/internal/store"
+	"github.com/friday-james/vibelog/internal/initcmd"
+	"github.com/friday-james/vibelog/internal/store"
 )
 
 func TestRun_FreshDir(t *testing.T) {
@@ -16,7 +16,7 @@ func TestRun_FreshDir(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 	syncDir := filepath.Join(tmp, ".sync")
-	for _, f := range []string{"anchor.yaml", "claims.yaml", "iterations.jsonl"} {
+	for _, f := range []string{"anchor.yaml", "iterations.jsonl"} {
 		if _, err := os.Stat(filepath.Join(syncDir, f)); err != nil {
 			t.Errorf("%s missing: %v", f, err)
 		}
@@ -31,9 +31,6 @@ func TestRun_FreshDir(t *testing.T) {
 	}
 	if state.Anchor.Now.IterationID != 1 {
 		t.Errorf("expected anchor.now.iteration_id=1, got %d", state.Anchor.Now.IterationID)
-	}
-	if len(state.Claims) != 0 {
-		t.Errorf("expected 0 claims, got %d", len(state.Claims))
 	}
 }
 

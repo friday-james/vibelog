@@ -17,7 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"vibelog/internal/model"
+	"github.com/friday-james/vibelog/internal/model"
 )
 
 // ErrAlreadyInitialized is returned when .sync/anchor.yaml exists at the target.
@@ -81,10 +81,6 @@ func Run(dir string) error {
 	}
 	if err := os.WriteFile(anchorPath, anchorBytes, 0o644); err != nil {
 		return fmt.Errorf("write anchor: %w", err)
-	}
-
-	if err := os.WriteFile(filepath.Join(syncDir, "claims.yaml"), []byte("[]\n"), 0o644); err != nil {
-		return fmt.Errorf("write claims: %w", err)
 	}
 
 	iter1 := model.Iteration{

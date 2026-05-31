@@ -9,13 +9,13 @@ import (
 
 	"path/filepath"
 
-	"vibelog/internal/gitcmd"
-	"vibelog/internal/initcmd"
-	"vibelog/internal/mcpserver"
-	"vibelog/internal/observecmd"
-	"vibelog/internal/serve"
-	"vibelog/internal/store"
-	"vibelog/internal/watchcmd"
+	"github.com/friday-james/vibelog/internal/gitcmd"
+	"github.com/friday-james/vibelog/internal/initcmd"
+	"github.com/friday-james/vibelog/internal/mcpserver"
+	"github.com/friday-james/vibelog/internal/observecmd"
+	"github.com/friday-james/vibelog/internal/serve"
+	"github.com/friday-james/vibelog/internal/store"
+	"github.com/friday-james/vibelog/internal/watchcmd"
 )
 
 const version = "0.1.0-dev"

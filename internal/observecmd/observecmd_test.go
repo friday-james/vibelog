@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"vibelog/internal/observecmd"
+	"github.com/friday-james/vibelog/internal/observecmd"
 )
 
 // withStdin temporarily replaces os.Stdin with the given bytes for the

@@ -1,4 +1,4 @@
-module vibelog
+module github.com/friday-james/vibelog
 
 go 1.25.5
 
