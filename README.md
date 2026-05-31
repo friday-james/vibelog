@@ -162,7 +162,7 @@ internal/
 
 ## Status
 
-Early. Daily-driven by the author against `claude code` on macOS (Linux probably works, untested). Codex support is in the design pile. Issues and PRs welcome.
+Early. Daily-driven by the author against `claude code` on Unix. Codex support is in the design pile. Issues and PRs welcome.
 
 ---
 
