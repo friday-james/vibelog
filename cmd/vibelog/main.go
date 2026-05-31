@@ -136,8 +136,8 @@ func runWatch(args []string) {
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := fs.Int("port", 7100, "port to listen on")
-	projectsFlag := fs.String("projects", "", "comma-separated multi-project list: name=dir,name2=dir2 (overrides config)")
-	configFlag := fs.String("config", serve.DefaultProjectsConfigPath(), "path to projects config (YAML list of {name, path})")
+	projectsFlag := fs.String("projects", "", "comma-separated multi-project list: name=dir,name2=dir2")
+	configFlag := fs.String("config", "", "path to projects config (YAML list of {name, path}). Multi-project mode is opt-in — leave empty to serve just one project")
 	fs.Parse(args)
 
 	addr := fmt.Sprintf("localhost:%d", *port)
@@ -151,10 +151,16 @@ func runServe(args []string) {
 		return
 	}
 
-	if projects, err := serve.LoadProjectsConfig(*configFlag); err != nil {
-		fmt.Fprintln(os.Stderr, "vibelog serve: config:", err)
-		os.Exit(1)
-	} else if len(projects) > 0 {
+	if *configFlag != "" {
+		projects, err := serve.LoadProjectsConfig(*configFlag)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "vibelog serve: config:", err)
+			os.Exit(1)
+		}
+		if len(projects) == 0 {
+			fmt.Fprintln(os.Stderr, "vibelog serve: -config:", *configFlag, "has no project entries")
+			os.Exit(1)
+		}
 		runMulti(projects, *configFlag, addr, "config")
 		return
 	}

@@ -76,26 +76,36 @@ vibelog init        # creates .sync/ skeleton
 vibelog serve &     # dashboard on http://localhost:7100
 ```
 
-### Multiple projects on one dashboard
+### Multiple projects on one dashboard (opt-in)
 
-Each project lives in its own repo. To see them all on one dashboard at `localhost:7100` with tabs in the header, declare them at `~/.vibelog/projects.yaml`:
+By default `vibelog serve` shows the one project rooted at `cwd` (or the path you pass). One project per serve, one serve per port. Run one for each repo if that's what you want:
+
+```bash
+cd /Users/you/code/vibelog && vibelog serve &           # → :7100
+cd /Users/you/code/ledger  && vibelog serve -port 7101 & # → :7101
+```
+
+If you'd rather see several repos on one page with a tab strip, opt into multi-project mode explicitly. Either inline:
+
+```bash
+vibelog serve -projects "vibelog=/Users/you/code/vibelog,ledger=/Users/you/code/ledger"
+```
+
+Or via a config file you pass with `-config`:
 
 ```yaml
+# ~/.vibelog/projects.yaml (or any path you like)
 - name: vibelog
   path: /Users/you/code/vibelog
 - name: ledger
   path: /Users/you/code/ledger
 ```
 
-Then `vibelog serve` mounts each project under `/p/<name>/` and renders a tab strip; click a tab to switch. The Stop hook still routes each assistant turn to the right project's `.sync/` automatically.
-
-Or declare projects inline if you don't want a config file:
-
 ```bash
-vibelog serve -projects "vibelog=/Users/you/code/vibelog,ledger=/Users/you/code/ledger"
+vibelog serve -config ~/.vibelog/projects.yaml
 ```
 
-Resolution order: `-projects` flag → `~/.vibelog/projects.yaml` → single-project mode on `cwd`.
+Multi-project mode is never auto-loaded. The Stop hook routes each assistant turn into the right project's `.sync/` based on cwd either way, so you can switch between the per-serve and one-serve approaches without re-wiring anything.
 
 ### Wire the Stop hook (records every assistant turn)
 
