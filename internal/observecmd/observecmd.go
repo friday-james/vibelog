@@ -144,13 +144,29 @@ func Run(projectDir string) error {
 	}
 
 	// Relativize file paths to the project root for portability.
+	//
+	// Primary path: filepath.Rel against projectDir. If the result doesn't
+	// escape the project (no leading ".."), use it.
+	//
+	// Recovery path: a path that escapes (e.g. the agent's transcript carries
+	// "/Users/.../old-project-name/foo.go" because the project was renamed
+	// mid-session) is REMAPPED by walking its suffixes from the leaf up and
+	// finding the longest suffix that exists under projectDir. This catches
+	// the rename case without us tracking rename history: the project tree
+	// itself is the source of truth.
 	rel := make([]string, 0, len(res.Files))
 	for _, p := range res.Files {
 		if r, err := filepath.Rel(projectDir, p); err == nil && !strings.HasPrefix(r, "..") {
 			rel = append(rel, r)
-		} else {
-			rel = append(rel, p)
+			continue
 		}
+		if remapped, ok := suffixUnderProject(projectDir, p); ok {
+			dbg("relativize: remapped %q → %q (path didn't fit projectDir directly)", p, remapped)
+			rel = append(rel, remapped)
+			continue
+		}
+		dbg("relativize: keeping absolute %q (no matching suffix under %q)", p, projectDir)
+		rel = append(rel, p)
 	}
 
 	dbg("relativized files: %v (count=%d)", rel, len(rel))
@@ -496,4 +512,31 @@ func extractUserPromptText(message json.RawMessage) (string, bool) {
 		return "", false
 	}
 	return strings.Join(parts, "\n"), true
+}
+
+// suffixUnderProject walks the path's components from the leaf back toward the
+// root and returns the LONGEST suffix that exists as a file under projectDir.
+// Used when filepath.Rel says the input escapes projectDir (e.g. the agent's
+// transcript carries an absolute path from before the project was renamed).
+// Example: projectDir="/foo/vibelog" and p="/foo/cockpit/internal/x.go" →
+// returns ("internal/x.go", true) because /foo/vibelog/internal/x.go exists.
+func suffixUnderProject(projectDir, p string) (string, bool) {
+	// Normalize to forward slashes, then split.
+	parts := strings.Split(filepath.ToSlash(p), "/")
+	// Try longest suffix first so we don't grab a shorter accidental match.
+	for start := 0; start < len(parts); start++ {
+		suffix := strings.Join(parts[start:], "/")
+		if suffix == "" || suffix == "/" {
+			continue
+		}
+		// Trim a possible leading slash (when start==0 on absolute paths).
+		clean := strings.TrimPrefix(suffix, "/")
+		if clean == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(projectDir, clean)); err == nil {
+			return clean, true
+		}
+	}
+	return "", false
 }
