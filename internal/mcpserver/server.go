@@ -25,12 +25,6 @@ func Serve(projectDir string) error {
 			mcp.WithArray("files_changed",
 				mcp.Description("Paths (relative to project root) of files this iteration modified."),
 			),
-			mcp.WithArray("claims_added",
-				mcp.Description("IDs of claims newly authored or asserted by this iteration."),
-			),
-			mcp.WithArray("claims_violated",
-				mcp.Description("IDs of claims now violated due to this iteration's changes."),
-			),
 			mcp.WithString("transcript_message_id",
 				mcp.Description("UUID of the assistant turn that produced this iteration (for future rollback reconciliation)."),
 			),
@@ -43,8 +37,6 @@ func Serve(projectDir string) error {
 			args := RecordIterationArgs{
 				Summary:             summary,
 				FilesChanged:        req.GetStringSlice("files_changed", nil),
-				ClaimsAdded:         req.GetStringSlice("claims_added", nil),
-				ClaimsViolated:      req.GetStringSlice("claims_violated", nil),
 				TranscriptMessageID: req.GetString("transcript_message_id", ""),
 			}
 			iter, err := RecordIteration(projectDir, args)
@@ -53,60 +45,6 @@ func Serve(projectDir string) error {
 			}
 			b, _ := json.Marshal(iter)
 			return mcp.NewToolResultText(fmt.Sprintf("recorded iteration #%d in %s\n%s", iter.ID, projectDir, string(b))), nil
-		},
-	)
-
-	s.AddTool(
-		mcp.NewTool("assert_claim",
-			mcp.WithDescription("Create or update a claim in .sync/claims.yaml. Use this to author invariants, contracts, failure-modes, or assumptions about the system. If a claim with the same id exists, it's overwritten in place (Established date preserved, LastVerified bumped to now)."),
-			mcp.WithString("id",
-				mcp.Required(),
-				mcp.Description("Kebab-case slug, stable across edits. Example: 'evidence-required-per-claim'."),
-			),
-			mcp.WithString("statement",
-				mcp.Required(),
-				mcp.Description("One-sentence proposition the claim makes about the system."),
-			),
-			mcp.WithString("category",
-				mcp.Required(),
-				mcp.Description("One of: invariant | contract | failure-mode | assumption"),
-			),
-			mcp.WithString("status",
-				mcp.Required(),
-				mcp.Description("One of: unknown | suspected | holding | violated"),
-			),
-			mcp.WithString("severity",
-				mcp.Required(),
-				mcp.Description("One of: low | med | high"),
-			),
-			mcp.WithString("evidence_json",
-				mcp.Required(),
-				mcp.Description(`JSON array of evidence entries. Each entry: {"type": "code"|"test"|"doc"|"decision"|"benchmark"|"metric"|"commit"|"missing", "path": "...", "polarity": "positive"|"negative", "note": "...", "ref": "...", "sha": "...", "kind": "test"|"comms"|"decision"|"verification"}. Per-type required: code/test need path+polarity; missing needs kind; metric needs ref; commit needs sha; doc/decision/benchmark need path. Use a missing entry if you can't ground the claim — never an empty array.`),
-			),
-			mcp.WithString("established_by",
-				mcp.Description("Who authored this claim (handle, 'agent', 'design', etc.)."),
-			),
-			mcp.WithString("related_claims",
-				mcp.Description("Comma-separated ids of related claims, if any."),
-			),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			args := AssertClaimArgs{
-				ID:            firstNonErr(req.RequireString("id")),
-				Statement:     firstNonErr(req.RequireString("statement")),
-				Category:      firstNonErr(req.RequireString("category")),
-				Status:        firstNonErr(req.RequireString("status")),
-				Severity:      firstNonErr(req.RequireString("severity")),
-				EvidenceJSON:  firstNonErr(req.RequireString("evidence_json")),
-				EstablishedBy: req.GetString("established_by", ""),
-				RelatedClaims: req.GetString("related_claims", ""),
-			}
-			claim, err := AssertClaim(projectDir, args)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			b, _ := json.Marshal(claim)
-			return mcp.NewToolResultText(fmt.Sprintf("asserted claim %q (status=%s) in %s\n%s", claim.ID, claim.Status, projectDir, string(b))), nil
 		},
 	)
 
@@ -182,7 +120,3 @@ func Serve(projectDir string) error {
 
 	return server.ServeStdio(s)
 }
-
-// firstNonErr returns the value, ignoring the error — fine because the MCP
-// framework already enforces required-arg validation before our handler runs.
-func firstNonErr[T any](v T, _ error) T { return v }

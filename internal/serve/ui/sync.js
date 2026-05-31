@@ -5,17 +5,6 @@
 // Card depth is preserved across re-renders by card-id. Re-render is skipped
 // entirely when /state.json content hasn't materially changed.
 
-const STATUS_ICONS = {
-  intent: '01',
-  approach: '02',
-  now: '▸',
-  violated: '✕',
-  risk: '⊘',
-  holding: '✓',
-  delta: 'Δ',
-  anchor: '·',
-};
-
 const depthMemory = {};
 let lastStateHash = null;
 let currentState = null;
@@ -86,57 +75,6 @@ function renderEmphasis(s) {
   return escapeHTML(s)
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*([^*]+)\*/g, '<span class="em">$1</span>');
-}
-
-// ===== Card-meta phrasing (matches mockup's editorial voice) =====
-function intentMeta(intent) {
-  return `intent · stable · ${relTime(intent.established)}`;
-}
-function approachMeta(approach) {
-  const ms = Date.now() - new Date(approach.last_changed).getTime();
-  if (ms < 24 * 3600 * 1000) return 'approach · changed today';
-  return `approach · changed ${relTime(approach.last_changed)}`;
-}
-function nowMeta(now) {
-  return `now · iter #${now.iteration_id} · ${relTime(now.started)}`;
-}
-function claimMeta(c) {
-  if (c.status === 'violated') {
-    return c.established_in_iteration
-      ? `violated · introduced iter #${c.established_in_iteration}`
-      : 'violated';
-  }
-  if (c.status === 'suspected') {
-    return c.established_in_iteration
-      ? `suspected · awaiting iter #${c.established_in_iteration}`
-      : 'suspected · awaiting verification';
-  }
-  if (c.status === 'holding') {
-    return c.established_in_iteration
-      ? `holding · iter #${c.established_in_iteration}`
-      : 'holding';
-  }
-  return c.status;
-}
-
-// ===== Evidence tag labels (editorial vocabulary per mockup) =====
-function evTagLabel(ev) {
-  if (ev.type === 'missing') {
-    return {
-      'test': 'NO TEST',
-      'comms': 'NO COMMS',
-      'decision': 'NO ADR',
-      'verification': 'UNVERIFIED',
-    }[ev.kind] || `MISSING:${ev.kind || '?'}`;
-  }
-  if (ev.type === 'decision') return 'ADR';
-  return ev.type.toUpperCase();
-}
-function evTagClass(ev) {
-  if (ev.type === 'missing') return 'miss';
-  if (ev.type === 'test') return 'test';
-  if (ev.type === 'code' || ev.type === 'decision' || ev.type === 'commit') return 'code';
-  return ''; // default amber tag
 }
 
 // ===== render =====
@@ -211,59 +149,11 @@ function render(s) {
   }
 }
 
-// statusBanner answers "is anything broken?" in one glance. Clicks scroll to
-// the matching section.
-function statusBanner(violatedN, riskN, holdingN, deltaN) {
-  const wrap = document.createElement('div');
-  wrap.className = 'status-banner';
-  const chip = (klass, target, n, label) => {
-    const c = document.createElement('div');
-    c.className = `banner-chip ${klass}` + (n > 0 ? ' has-count' : '');
-    c.dataset.bannerTarget = target;
-    c.innerHTML = `<span class="bc-n">${n}</span><span class="bc-l">${escapeHTML(label)}</span>`;
-    return c;
-  };
-  wrap.appendChild(chip('sev-violated', 'VIOLATED', violatedN, 'violated'));
-  wrap.appendChild(chip('sev-risk',     'AT RISK',  riskN,     'at risk'));
-  wrap.appendChild(chip('sev-holding',  'HOLDING',  holdingN,  'holding'));
-  wrap.appendChild(chip('sev-delta',    'PROMPTS',  deltaN,    'prompts'));
-  return wrap;
-}
-
-function sectionHeader(title, count, sev) {
+function sectionHeader(title, count) {
   const h = document.createElement('div');
-  h.className = 'section-header' + (sev ? ' sev-' + sev : '');
+  h.className = 'section-header';
   h.innerHTML = `<div class="section-title">${escapeHTML(title)}</div><div class="section-count">${escapeHTML(count)}</div>`;
   return h;
-}
-
-// ===== Anchor cards =====
-// L2: WHY prose (statement repeated as the explanation, since we don't have
-// separate WHY text) + evidence box. L3: alternatives/decision (from extra
-// evidence if any). L4: propagation (related_claims, if present).
-function anchorCard(statusClass, cardID, icon, head, metaText, anchorSection, initialDepth = 0) {
-  const evidence = anchorSection?.evidence || [];
-  return buildCard({
-    statusClass, cardID, icon, head, metaText, initialDepth,
-    L2: whyBlock('WHY', head, evidence),
-    L3: null,
-    L4: null,
-  });
-}
-
-// ===== Claim cards =====
-function claimCard(c, statusClass) {
-  const icon = STATUS_ICONS[statusClass] || '·';
-  const meta = claimMeta(c);
-  return buildCard({
-    statusClass, cardID: 'claim-' + c.id, icon,
-    head: c.statement, metaText: meta, initialDepth: 0,
-    L2: whyBlock(statusClass === 'violated' ? 'WHY VIOLATED'
-              : statusClass === 'risk' ? 'WHY AT RISK'
-              : 'WHY HOLDING', c.statement, c.evidence),
-    L3: c.related_claims?.length ? propagationBlock('RELATED CLAIMS', c.related_claims) : null,
-    L4: null,
-  });
 }
 
 // ===== Prompt cards =====
@@ -540,111 +430,6 @@ function labelForCard(card, depth) {
   }
 }
 
-// whyBlock = label + optional prose + evidence box.
-function whyBlock(label, prose, evidence) {
-  let html = `<div class="why-label">${escapeHTML(label)}</div>`;
-  if (prose && String(prose).trim()) {
-    html += `<p class="why-text">${renderEmphasis(prose)}</p>`;
-  }
-  if (evidence && evidence.length) {
-    html += `<div class="evidence">`;
-    evidence.forEach(ev => {
-      const tag = evTagLabel(ev);
-      const tagClass = evTagClass(ev);
-      const path = ev.path || ev.ref || ev.sha || '';
-      const polarity = ev.polarity === 'negative' ? ' (✗)' : '';
-      if (ev.type === 'missing') {
-        html += `<div class="ev-row"><span class="ev-tag miss">${escapeHTML(tag)}</span><span class="ev-empty">${escapeHTML(ev.note || '(no note)')}</span></div>`;
-      } else {
-        const note = ev.note ? ` <span class="ev-note">· ${escapeHTML(ev.note)}</span>` : '';
-        html += `<div class="ev-row"><span class="ev-tag ${tagClass}">${escapeHTML(tag)}</span><span class="ev-path">${escapeHTML(path)}${escapeHTML(polarity)}</span>${note}</div>`;
-      }
-    });
-    html += `</div>`;
-  }
-  return html;
-}
-
-function propagationBlock(label, items) {
-  return `<span class="why-label">${escapeHTML(label)}</span><ul class="prop-list">` +
-    items.map(i => `<li><span class="prop-dir up">related</span>${escapeHTML(i)}</li>`).join('') +
-    `</ul>`;
-}
-
-function compactItem(c) {
-  const d = document.createElement('div');
-  d.className = 'compact-item';
-  d.dataset.cardId = 'compact-' + c.id;
-  const evHint = compactEvidenceHint(c.evidence);
-  d.innerHTML = `<span class="ci-mark">✓</span><span class="ci-text" title="${escapeHTML(c.id)}">${renderEmphasis(c.statement)}</span><span class="ci-evi">${escapeHTML(evHint)}</span>`;
-  return d;
-}
-
-function compactEvidenceHint(evidence) {
-  if (!evidence || !evidence.length) return '';
-  const kinds = new Set(evidence.map(e => e.type === 'missing' ? 'miss' : e.type));
-  if (kinds.has('test')) return 'test ✓';
-  if (kinds.has('code')) return 'code ✓';
-  if (kinds.has('benchmark')) return 'infra ✓';
-  if (kinds.has('doc')) return 'doc ✓';
-  if (kinds.has('decision')) return 'adr ✓';
-  return [...kinds].join(', ');
-}
-
-// ===== BLAST RADIUS — files touched by the most recent agent iteration =====
-function renderBlastRadius(app, allIters) {
-  const lastIter = [...allIters].reverse().find(it => it.kind === 'iteration');
-  const files = lastIter?.files_changed || [];
-  const unverified = files.filter(f => /(_test\.go|tests?\/|\.yaml$|\.json$)/.test(f) ? false : true).length;
-  app.appendChild(sectionHeader('BLAST RADIUS · WHAT THIS EDIT TOUCHES',
-    files.length ? `${files.length} locations · ${unverified} unverified` : 'none'));
-  if (files.length === 0) {
-    app.appendChild(empty('(no recent file changes)'));
-    return;
-  }
-  const list = document.createElement('div');
-  list.className = 'blast-list';
-  files.forEach((f, i) => list.appendChild(blastItem(f, i, files.length)));
-  app.appendChild(list);
-}
-
-function blastItem(path, idx, total) {
-  const sev = blastSeverity(path, idx, total);
-  const why = blastWhy(path);
-  const status = blastStatus(path);
-  const item = document.createElement('div');
-  item.className = 'blast-item';
-  item.innerHTML = `
-    <span class="blast-sev ${sev.toLowerCase()}">${sev}</span>
-    <span class="blast-path">${escapeHTML(path)}</span>
-    <span class="blast-why">${escapeHTML(why)}</span>
-    <span class="blast-status${status.unverified ? ' unverified' : ''}">${escapeHTML(status.label)}</span>
-  `;
-  return item;
-}
-
-function blastSeverity(path, idx, total) {
-  if (/_test\.go$|^tests?\//.test(path)) return 'MED';
-  if (/^docs?\//.test(path) || /\.md$/.test(path)) return 'LOW';
-  if (idx < 2) return 'HIGH';
-  if (idx < Math.ceil(total / 2)) return 'MED';
-  return 'LOW';
-}
-function blastWhy(path) {
-  if (/_test\.go$|^tests?\//.test(path)) return 'tests';
-  if (/^docs?\//.test(path) || /\.md$/.test(path)) return 'docs';
-  if (/^cmd\//.test(path)) return 'CLI entry';
-  if (/^internal\/serve/.test(path)) return 'server / UI';
-  if (/^internal\/model/.test(path)) return 'core data model';
-  if (/^internal\//.test(path)) return 'internal package';
-  if (/^\.sync\//.test(path)) return '.sync/ state';
-  return 'change';
-}
-function blastStatus(path) {
-  if (/_test\.go$/.test(path)) return {label: 'verified', unverified: false};
-  if (/^\.sync\//.test(path)) return {label: 'data', unverified: false};
-  return {label: 'unverified', unverified: true};
-}
 
 // ===== RAIL timeline =====
 function renderTimeline(iters) {

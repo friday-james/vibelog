@@ -27,26 +27,9 @@ import (
 type RecordIterationArgs struct {
 	Summary             string   `json:"summary"`
 	FilesChanged        []string `json:"files_changed,omitempty"`
-	ClaimsAdded         []string `json:"claims_added,omitempty"`
-	ClaimsViolated      []string `json:"claims_violated,omitempty"`
 	TranscriptMessageID string   `json:"transcript_message_id,omitempty"`
 	UserPrompt          string   `json:"user_prompt,omitempty"`
 	Implementation      string   `json:"implementation,omitempty"`
-}
-
-// AssertClaimArgs is the typed input for the assert_claim tool. evidence_json
-// is a JSON-encoded array of evidence objects so the tool can pass arbitrary
-// nested shapes through the MCP wire (mark3labs/mcp-go is awkward with deeply
-// nested schemas).
-type AssertClaimArgs struct {
-	ID            string `json:"id"`
-	Statement     string `json:"statement"`
-	Category      string `json:"category"`
-	Status        string `json:"status"`
-	Severity      string `json:"severity"`
-	EvidenceJSON  string `json:"evidence_json"`
-	EstablishedBy string `json:"established_by,omitempty"`
-	RelatedClaims string `json:"related_claims,omitempty"` // comma-separated ids
 }
 
 // UpdateAnchorArgs is the typed input for the update_anchor tool. Each section
@@ -119,8 +102,6 @@ func RecordIteration(projectDir string, args RecordIterationArgs) (*model.Iterat
 		Kind:                model.KindIteration,
 		Summary:             args.Summary,
 		FilesChanged:        args.FilesChanged,
-		ClaimsAdded:         args.ClaimsAdded,
-		ClaimsViolated:      args.ClaimsViolated,
 		Agent:               "claude-code",
 		SessionID:           os.Getenv("CLAUDE_SESSION_ID"),
 		TranscriptMessageID: args.TranscriptMessageID,
@@ -193,77 +174,6 @@ func atomicCopyFile(src, dst string) error {
 	return os.Rename(tmpName, dst)
 }
 
-// AssertClaim creates or updates a claim by id in projectDir's claims.yaml.
-// If a claim with the same id exists, its fields are overwritten in place
-// (preserving the original Established date). Otherwise a new claim is
-// appended. The whole file is rewritten atomically (tmp + rename).
-func AssertClaim(projectDir string, args AssertClaimArgs) (*model.Claim, error) {
-	state, err := store.Load(projectDir)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf(".sync/ not initialized at %s — run `vibelog init` first", projectDir)
-		}
-		return nil, fmt.Errorf("load current state: %w", err)
-	}
-
-	var evidence []model.Evidence
-	if strings.TrimSpace(args.EvidenceJSON) == "" {
-		return nil, fmt.Errorf("evidence_json is required (use a 'missing' entry if no positive evidence)")
-	}
-	if err := json.Unmarshal([]byte(args.EvidenceJSON), &evidence); err != nil {
-		return nil, fmt.Errorf("parse evidence_json: %w", err)
-	}
-
-	var related []string
-	if strings.TrimSpace(args.RelatedClaims) != "" {
-		for _, r := range strings.Split(args.RelatedClaims, ",") {
-			if s := strings.TrimSpace(r); s != "" {
-				related = append(related, s)
-			}
-		}
-	}
-
-	now := time.Now().UTC().Truncate(time.Second)
-	claim := model.Claim{
-		ID:            args.ID,
-		Statement:     args.Statement,
-		Category:      model.ClaimCategory(args.Category),
-		Status:        model.ClaimStatus(args.Status),
-		Severity:      model.Severity(args.Severity),
-		Evidence:      evidence,
-		Established:   now,
-		EstablishedBy: args.EstablishedBy,
-		RelatedClaims: related,
-	}
-
-	updated := false
-	for i := range state.Claims {
-		if state.Claims[i].ID == claim.ID {
-			// Preserve original Established date; the rest is replaced.
-			claim.Established = state.Claims[i].Established
-			claim.LastVerified = &now
-			state.Claims[i] = claim
-			updated = true
-			break
-		}
-	}
-	if !updated {
-		state.Claims = append(state.Claims, claim)
-	}
-
-	if err := claim.Validate(); err != nil {
-		return nil, fmt.Errorf("claim validation: %w", err)
-	}
-
-	data, err := yaml.Marshal(state.Claims)
-	if err != nil {
-		return nil, fmt.Errorf("marshal claims: %w", err)
-	}
-	if err := atomicWrite(filepath.Join(projectDir, ".sync", "claims.yaml"), data); err != nil {
-		return nil, err
-	}
-	return &claim, nil
-}
 
 // UpdateAnchor applies optional JSON-encoded patches to one or more sections
 // of anchor.yaml (intent, approach, now). Each section is replaced wholesale

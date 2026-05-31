@@ -120,8 +120,6 @@ func TestRecordIteration_PropagatesOptionalFields(t *testing.T) {
 	iter, err := mcpserver.RecordIteration(tmp, mcpserver.RecordIterationArgs{
 		Summary:             "exercises every optional field",
 		FilesChanged:        []string{"a.go", "b.go"},
-		ClaimsAdded:         []string{"alpha"},
-		ClaimsViolated:      []string{"beta"},
 		TranscriptMessageID: "msg-uuid-123",
 	})
 	if err != nil {
@@ -132,8 +130,5 @@ func TestRecordIteration_PropagatesOptionalFields(t *testing.T) {
 	}
 	if iter.TranscriptMessageID != "msg-uuid-123" {
 		t.Errorf("transcript_message_id not propagated")
-	}
-	if len(iter.ClaimsViolated) != 1 || iter.ClaimsViolated[0] != "beta" {
-		t.Errorf("claims_violated not propagated: %v", iter.ClaimsViolated)
 	}
 }

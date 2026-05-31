@@ -1,5 +1,7 @@
-/cockpit
+.env
 .sync/local/
 *.tmp
+/cockpit
 build-artifacts/
-.env
+cockpit
+vibelog
