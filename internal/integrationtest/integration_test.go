@@ -397,54 +397,6 @@ func TestE2E_MultiProjectServeRoutesPerProject(t *testing.T) {
 	}
 }
 
-// ---------- Test 5: auto-discovery ----------
-
-func TestE2E_DiscoverProjectsFindsChildrenWithAnchor(t *testing.T) {
-	root := t.TempDir()
-
-	// Two real projects (have .sync/anchor.yaml).
-	for _, name := range []string{"vibelog", "ledger"} {
-		dir := filepath.Join(root, name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := initcmd.Run(dir); err != nil {
-			t.Fatalf("init %s: %v", name, err)
-		}
-	}
-	// One unrelated dir with no .sync/.
-	if err := os.MkdirAll(filepath.Join(root, "scratch"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// One dotdir (must be skipped).
-	if err := os.MkdirAll(filepath.Join(root, ".hidden", ".sync"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".hidden", ".sync", "anchor.yaml"), []byte("intent:\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	projects, err := serve.DiscoverProjects(root, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := []string{}
-	for _, p := range projects {
-		names = append(names, p.Name)
-	}
-	if len(projects) != 2 {
-		t.Errorf("expected 2 projects (vibelog, ledger), got %d: %v", len(projects), names)
-	}
-	have := map[string]bool{}
-	for _, n := range names {
-		have[n] = true
-	}
-	for _, want := range []string{"vibelog", "ledger"} {
-		if !have[want] {
-			t.Errorf("expected to discover %q, only found %v", want, names)
-		}
-	}
-}
 
 // ---------- helpers ----------
 

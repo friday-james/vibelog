@@ -84,29 +84,26 @@ body::before {
 .crumbs .repo { color: var(--text-2); }
 .crumbs .branch { color: var(--amber); }
 .crumbs .sep { color: var(--text-4); margin: 0 6px; }
-/* Project switcher (hidden in single-project mode, populated by sync.js when
-   /projects.json returns ≥1 entry). Sits right after the brand. */
-.proj-switcher { display: inline-flex; align-items: center; }
-.proj-switcher .proj-select {
-  font-family: var(--font-mono); font-size: 10.5px;
-  letter-spacing: 0.06em; color: var(--text-2);
-  background: var(--surface-2); border: 1px solid var(--border);
-  border-radius: 3px; padding: 2px 6px;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-  padding-right: 18px;
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
-    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
-  background-position:
-    calc(100% - 9px) 50%,
-    calc(100% - 5px) 50%;
-  background-size: 4px 4px;
-  background-repeat: no-repeat;
+/* Project tabs (hidden in single-project mode, populated by sync.js when
+   /projects.json returns ≥1 entry). Sits inline in the header. */
+.proj-switcher { display: inline-flex; align-items: stretch; height: 100%; }
+.proj-tabs { display: inline-flex; align-items: stretch; gap: 0; height: 100%; }
+.proj-tab {
+  display: inline-flex; align-items: center;
+  padding: 0 14px; height: 100%;
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-3);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
 }
-.proj-switcher .proj-select:hover { border-color: var(--amber-dim); color: var(--amber-bright); }
-.proj-switcher .proj-select:focus { outline: 1px solid var(--amber-dim); outline-offset: 1px; }
+.proj-tab:hover { color: var(--text); background: var(--surface-2); }
+.proj-tab.active {
+  color: var(--amber-bright);
+  border-bottom-color: var(--amber);
+  background: var(--surface-2);
+}
 .sync-state {
   font-family: var(--font-mono); font-size: 11px; color: var(--text-2);
   margin-left: auto;

@@ -159,56 +159,30 @@ func runServe(args []string) {
 		return
 	}
 
-	// Auto-discover: walk cwd (or the positional arg if given) up to 3 levels
-	// deep, treating any subdir with .sync/anchor.yaml as a project. If we find
-	// ≥2, multi-project mode. If exactly 1, single-project mode using that dir.
-	// If 0, fall back to single-project on the search root itself (which will
-	// silent-skip in the dashboard if .sync/ doesn't exist there either).
-	var root string
+	// Single-project fallback (preserves the pre-multi behavior). Used when
+	// the user hasn't declared any projects via flag or config.
+	var dir string
 	if fs.NArg() > 0 {
-		root = fs.Arg(0)
+		dir = fs.Arg(0)
 	} else {
 		cwd, err := os.Getwd()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "cwd:", err)
 			os.Exit(1)
 		}
-		root = cwd
+		dir = cwd
 	}
-	discovered, err := serve.DiscoverProjects(root, 3)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "vibelog serve: discover:", err)
-		os.Exit(1)
-	}
-	switch {
-	case len(discovered) >= 2:
-		runMulti(discovered, root, addr, "discover")
-		return
-	case len(discovered) == 1:
-		dir := discovered[0].Path
-		fmt.Printf("vibelog serving %s (discovered) on http://%s\n", dir, addr)
-		if err := serve.Run(dir, addr); err != nil {
-			fmt.Fprintln(os.Stderr, "vibelog serve:", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// Nothing discovered — serve the root as a single project (existing behavior).
-	fmt.Printf("vibelog serving %s on http://%s\n", root, addr)
-	if err := serve.Run(root, addr); err != nil {
+	fmt.Printf("vibelog serving %s on http://%s\n", dir, addr)
+	if err := serve.Run(dir, addr); err != nil {
 		fmt.Fprintln(os.Stderr, "vibelog serve:", err)
 		os.Exit(1)
 	}
 }
 
 func runMulti(projects []serve.Project, src, addr, srcKind string) {
-	switch srcKind {
-	case "config":
+	if srcKind == "config" {
 		fmt.Printf("vibelog serving %d projects from %s on http://%s\n", len(projects), src, addr)
-	case "discover":
-		fmt.Printf("vibelog serving %d projects discovered under %s on http://%s\n", len(projects), src, addr)
-	default:
+	} else {
 		fmt.Printf("vibelog serving %d projects on http://%s\n", len(projects), addr)
 	}
 	for _, p := range projects {

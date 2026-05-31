@@ -78,14 +78,7 @@ vibelog serve &     # dashboard on http://localhost:7100
 
 ### Multiple projects on one dashboard
 
-`vibelog serve` from a parent directory auto-discovers every child project that has a `.sync/anchor.yaml` and mounts them under `/p/<name>/` on a single dashboard. The header switcher routes between them; the Stop hook still routes each turn into the right project's `.sync/` automatically.
-
-```bash
-cd ~/code           # any dir containing initialized vibelog projects
-vibelog serve       # → http://localhost:7100, header switcher per project
-```
-
-If you want explicit control instead of discovery, declare projects at `~/.vibelog/projects.yaml`:
+Each project lives in its own repo. To see them all on one dashboard at `localhost:7100` with tabs in the header, declare them at `~/.vibelog/projects.yaml`:
 
 ```yaml
 - name: vibelog
@@ -94,13 +87,15 @@ If you want explicit control instead of discovery, declare projects at `~/.vibel
   path: /Users/you/code/ledger
 ```
 
-Or inline:
+Then `vibelog serve` mounts each project under `/p/<name>/` and renders a tab strip; click a tab to switch. The Stop hook still routes each assistant turn to the right project's `.sync/` automatically.
+
+Or declare projects inline if you don't want a config file:
 
 ```bash
 vibelog serve -projects "vibelog=/Users/you/code/vibelog,ledger=/Users/you/code/ledger"
 ```
 
-Resolution order: `-projects` flag → `~/.vibelog/projects.yaml` → auto-discover from `cwd`. Single-project mode (the pre-multi behavior) still works when discovery finds exactly one.
+Resolution order: `-projects` flag → `~/.vibelog/projects.yaml` → single-project mode on `cwd`.
 
 ### Wire the Stop hook (records every assistant turn)
 

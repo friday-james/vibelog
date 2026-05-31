@@ -663,8 +663,9 @@ function tickTimestamps() {
 }
 
 // Multi-project switcher: probe /projects.json at startup. Single-project mode
-// returns 404 and the switcher stays hidden. Multi-project mode populates a
-// <select> in the header; switching navigates to the chosen /p/<name>/.
+// returns 404 and the tabs stay hidden. Multi-project mode renders a row of
+// clickable tabs under the header (one per project, the current one styled
+// active). Click a tab → navigate to /p/<name>/.
 async function setupProjectSwitcher() {
   try {
     const r = await fetch('/projects.json', { cache: 'no-store' });
@@ -673,24 +674,19 @@ async function setupProjectSwitcher() {
     if (!Array.isArray(projects) || projects.length === 0) return;
     const el = document.getElementById('projSwitcher');
     if (!el) return;
-    // Current project = path segment after /p/
     const m = location.pathname.match(/^\/p\/([^/]+)\//);
     const current = m ? m[1] : '';
-    const sel = document.createElement('select');
-    sel.className = 'proj-select';
-    sel.setAttribute('aria-label', 'project');
+    const tabs = document.createElement('nav');
+    tabs.className = 'proj-tabs';
+    tabs.setAttribute('aria-label', 'project tabs');
     for (const p of projects) {
-      const opt = document.createElement('option');
-      opt.value = p.name;
-      opt.textContent = p.name;
-      if (p.name === current) opt.selected = true;
-      sel.appendChild(opt);
+      const tab = document.createElement('a');
+      tab.className = 'proj-tab' + (p.name === current ? ' active' : '');
+      tab.href = `/p/${encodeURIComponent(p.name)}/`;
+      tab.textContent = p.name;
+      tabs.appendChild(tab);
     }
-    sel.addEventListener('change', () => {
-      const name = sel.value;
-      if (name && name !== current) location.assign(`/p/${encodeURIComponent(name)}/`);
-    });
-    el.appendChild(sel);
+    el.appendChild(tabs);
     el.hidden = false;
   } catch (_) { /* single-project mode; ignore */ }
 }
