@@ -147,10 +147,19 @@ If `vibelog` isn't on the PATH that Claude Code spawns hooks with, use the absol
 ### MCP server for teach-backs (required)
 
 ```bash
-claude mcp add vibelog vibelog mcp
+claude mcp add -s user vibelog vibelog mcp
 ```
 
-This registers a `set_implementation` tool the agent calls at the end of every turn. The curated summary + response text are saved *during* the turn, so they're guaranteed to be there when the Stop hook reads. Without it you'll see empty cards on most Q&A turns and on longer file-touching turns. Claude Code flushes the assistant's reply to the transcript after the Stop hook fires, so the post-hoc heuristic loses the race.
+Confirm it took:
+
+```bash
+claude mcp list | grep vibelog
+# expect: vibelog: vibelog mcp - ✓ Connected
+```
+
+`-s user` registers vibelog at the user scope so every project picks it up. (Without it, the default is project-local and you'd have to re-run the command in every repo.)
+
+This gives the agent a `set_implementation` tool, which it calls at the end of every turn. The curated summary + response text are saved *during* the turn, so they're guaranteed to be there when the Stop hook reads. Without the MCP server you'll see empty cards on most Q&A turns and on longer file-touching turns. Claude Code flushes the assistant's reply to the transcript after the Stop hook fires, so the post-hoc heuristic loses the race.
 
 ---
 
