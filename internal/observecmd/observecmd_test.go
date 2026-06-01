@@ -214,36 +214,45 @@ func TestAnalyzeTranscript_DedupesFiles(t *testing.T) {
 	}
 }
 
-func TestAnalyzeTranscript_SkipsTaskNotificationAsUserPrompt(t *testing.T) {
+func TestAnalyzeTranscript_FlagsTaskNotificationAsSyntheticTurn(t *testing.T) {
 	// When a background Workflow/Agent completes, the harness injects a
-	// <task-notification> block as type:"user". observe must anchor the turn
-	// at that synthetic message (so the assistant's response still gets
-	// recorded) but return an empty UserPrompt so the dashboard falls back
-	// to the summary instead of leaking the meta block.
-	path := writeTranscript(t, []string{
-		// previous real turn
-		`{"uuid":"u0","type":"user","message":{"role":"user","content":[{"type":"text","text":"first prompt"}]}}`,
-		`{"uuid":"a0","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first reply"}]}}`,
-		// synthetic user message from harness
-		`{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"<task-notification>\n<task-id>wf123</task-id>\n<status>completed</status>\n</task-notification>"}]}}`,
-		// assistant response to the auto-fired turn
-		`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Here's the final article."}]}}`,
-	})
-	res, err := observecmd.AnalyzeTranscript(path)
-	if err != nil {
-		t.Fatal(err)
+	// <task-notification> block as type:"user". observe must flag the result
+	// as SyntheticTurn so Run() skips recording entirely — there's no human
+	// behind it and the assistant's response is bookkeeping noise.
+	// Both content shapes appear in real transcripts: array-of-blocks AND
+	// bare string. Test both.
+	cases := []struct {
+		name   string
+		userMsg string
+	}{
+		{
+			name:   "blocks_form",
+			userMsg: `{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"<task-notification>\n<task-id>wf123</task-id>\n</task-notification>"}]}}`,
+		},
+		{
+			name:   "string_form",
+			userMsg: `{"uuid":"u1","type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>wf456</task-id>\n</task-notification>"}}`,
+		},
 	}
-	if res.UserPrompt != "" {
-		t.Errorf("expected empty UserPrompt for harness-injected task-notification, got %q", res.UserPrompt)
-	}
-	if res.LastMessageUUID != "a1" {
-		t.Errorf("expected to anchor at the auto-fired turn (uuid a1), got %q", res.LastMessageUUID)
-	}
-	if !strings.Contains(res.Implementation, "Here's the final article.") {
-		t.Errorf("expected Implementation to contain the new turn's assistant text, got %q", res.Implementation)
-	}
-	if strings.Contains(res.Implementation, "first reply") {
-		t.Errorf("Implementation should not include the PREVIOUS turn's assistant text; got %q", res.Implementation)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTranscript(t, []string{
+				`{"uuid":"u0","type":"user","message":{"role":"user","content":[{"type":"text","text":"first prompt"}]}}`,
+				`{"uuid":"a0","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first reply"}]}}`,
+				tc.userMsg,
+				`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"response to synthetic"}]}}`,
+			})
+			res, err := observecmd.AnalyzeTranscript(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !res.SyntheticTurn {
+				t.Errorf("expected SyntheticTurn=true for harness-injected task-notification (%s)", tc.name)
+			}
+			if res.LastMessageUUID != "a1" {
+				t.Errorf("expected anchor at synthetic turn (uuid a1), got %q", res.LastMessageUUID)
+			}
+		})
 	}
 }
 

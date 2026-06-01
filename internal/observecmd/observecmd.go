@@ -12,8 +12,8 @@
 // fires of the same hook (Claude Code retries, double-invocations) only land
 // one entry.
 //
-// Pure-conversation turns (no Edit/Write/MultiEdit/NotebookEdit calls) are
-// skipped: nothing to track when the assistant only chatted.
+// Recording is gated by vibelog serve's active marker so a global Stop hook is
+// harmless in repos where vibelog is not currently enabled.
 package observecmd
 
 import (
@@ -62,11 +62,17 @@ type Result struct {
 	Files           []string
 	UserPrompt      string // the user's prompt that triggered the turn
 	Implementation  string // every assistant text block joined — the L1 teach-back
+
+	// SyntheticTurn is true when the back-walker landed on a harness-injected
+	// auto-fired turn (e.g. <task-notification> from a background workflow).
+	// There is no human behind such a turn, so Run() skips recording it.
+	SyntheticTurn bool
 }
 
 // Run reads a Stop-hook payload from stdin and records an iteration in
 // projectDir's .sync/. If projectDir is empty, uses payload.Cwd. Skips when
-// stop_hook_active is true (loop guard) or when the turn touched no files.
+// stop_hook_active is true (loop guard), the repo is not initialized, or the
+// repo has no active vibelog serve marker.
 func Run(projectDir string) error {
 	dbg("Run() invoked, projectDir-arg=%q, PATH=%q", projectDir, os.Getenv("PATH"))
 	var payload HookPayload
@@ -120,6 +126,14 @@ func Run(projectDir string) error {
 	if err != nil {
 		dbg("AnalyzeTranscript failed: %v", err)
 		return fmt.Errorf("analyze transcript: %w", err)
+	}
+	// Synthetic turns (e.g. <task-notification> auto-fired by the harness when
+	// a background Workflow completes) have no human behind them. Skip
+	// recording entirely — the assistant's response to the notification is
+	// just bookkeeping noise, not a real iteration of the user's work.
+	if res.SyntheticTurn {
+		dbg("synthetic turn (harness-injected user message) — skipping record")
+		return nil
 	}
 	for attempt := 0; res.Implementation == "" && len(res.Files) == 0 && attempt < 3; attempt++ {
 		delay := time.Duration(200*(attempt+1)) * time.Millisecond
@@ -235,6 +249,7 @@ func AnalyzeTranscript(path string) (Result, error) {
 	// after the last tool, missing all the Edit/Write calls.
 	startIdx := 0
 	var userPromptText string
+	var syntheticTurn bool
 	for i := len(lines) - 1; i >= 0; i-- {
 		var entry struct {
 			Type    string          `json:"type"`
@@ -246,11 +261,14 @@ func AnalyzeTranscript(path string) (Result, error) {
 		if entry.Type != "user" {
 			continue
 		}
-		if text, ok := extractUserPromptText(entry.Message); ok {
-			userPromptText = text
-			startIdx = i + 1
-			break
+		text, ok, synth := extractUserPromptText(entry.Message)
+		if !ok {
+			continue
 		}
+		userPromptText = text
+		startIdx = i + 1
+		syntheticTurn = synth
+		break
 	}
 
 	// Step 2: walk forward through the turn, collecting files in order and
@@ -319,6 +337,7 @@ func AnalyzeTranscript(path string) (Result, error) {
 		res.SummaryText = strings.TrimRight(res.SummaryText[:200], " ") + "…"
 	}
 	res.UserPrompt = sanitizeUserPrompt(userPromptText)
+	res.SyntheticTurn = syntheticTurn
 	// Implementation defaults to the LAST text block (heuristic fallback).
 	// Run() may override this with the contents of .sync/pending_implementation.txt
 	// if the agent called set_implementation during the turn.
@@ -484,28 +503,39 @@ func plural(n int) string {
 // transcript line of type:"user" carries an actual user-typed message, NOT a
 // tool_result wrapped as a user-role message. Claude Code's transcript makes
 // both look like type:"user" at the top level; only content distinguishes them.
-func extractUserPromptText(message json.RawMessage) (string, bool) {
+// extractUserPromptText returns (text, ok, synthetic):
+//   - ok=false: this entry is not a real user message (e.g. tool_result wrapped
+//     as type:"user", or unparseable). Caller keeps walking back.
+//   - synthetic=true: this is the anchor of a HARNESS-INJECTED auto-fired turn
+//     (e.g. <task-notification> emitted when a background Workflow/Agent
+//     completes). text is the raw meta block. Caller should skip recording
+//     this turn entirely — there is no human behind it.
+//   - synthetic=false, ok=true: real user prompt.
+func extractUserPromptText(message json.RawMessage) (text string, ok bool, synthetic bool) {
 	var msg struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	}
 	if err := json.Unmarshal(message, &msg); err != nil {
-		return "", false
+		return "", false, false
 	}
 	// content may be a bare string OR an array of blocks; both forms appear.
 	if len(msg.Content) > 0 && msg.Content[0] == '"' {
 		var s string
-		if err := json.Unmarshal(msg.Content, &s); err == nil {
-			return s, true
+		if err := json.Unmarshal(msg.Content, &s); err != nil {
+			return "", false, false
 		}
-		return "", false
+		if isHarnessInjectedUserText(s) {
+			return s, true, true
+		}
+		return s, true, false
 	}
 	var blocks []struct {
 		Type string `json:"type"`
 		Text string `json:"text,omitempty"`
 	}
 	if err := json.Unmarshal(msg.Content, &blocks); err != nil {
-		return "", false
+		return "", false, false
 	}
 	var parts []string
 	for _, b := range blocks {
@@ -514,18 +544,13 @@ func extractUserPromptText(message json.RawMessage) (string, bool) {
 		}
 	}
 	if len(parts) == 0 {
-		return "", false
+		return "", false, false
 	}
-	text := strings.Join(parts, "\n")
-	// Harness-injected synthetic user turns (e.g. <task-notification> emitted
-	// when a background Workflow/Agent completes) are wrapped as type:"user"
-	// indistinguishable from real prompts. Anchor the turn here so we still
-	// record the assistant's response, but return empty so the dashboard
-	// falls back to the summary instead of dumping the meta block.
-	if isHarnessInjectedUserText(text) {
-		return "", true
+	joined := strings.Join(parts, "\n")
+	if isHarnessInjectedUserText(joined) {
+		return joined, true, true
 	}
-	return text, true
+	return joined, true, false
 }
 
 // isHarnessInjectedUserText reports whether the message content is purely a
