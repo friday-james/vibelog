@@ -58,7 +58,7 @@ vibelog puts the engineering workflow back: an ordered log you scroll, a per-tur
 
 ## Install
 
-Requires [Claude Code](https://claude.ai/code) and git.
+Requires [Claude Code](https://claude.ai/code) or [Codex CLI](https://help.openai.com/en/articles/11096431), plus git.
 
 ### From a release binary (recommended)
 
@@ -91,8 +91,10 @@ That puts `vibelog` in `~/go/bin/` (make sure it's on your `$PATH`).
 ```bash
 cd /path/to/your/repo
 vibelog init        # creates .sync/ skeleton
-vibelog serve &     # dashboard on http://localhost:7100
+vibelog serve &     # dashboard on http://localhost:7100; logging stays on while this process lives
 ```
+
+`vibelog serve` is the activation lease. While it runs, the project has a `.sync/serve-active.json` marker and agent turns are recorded. `Ctrl+C` the process and logging stops for that repo.
 
 ### Multiple projects on one dashboard (leases)
 
@@ -114,7 +116,7 @@ cd ~/code/ledger && vibelog serve
 # Ctrl+C terminal 1 → the whole dashboard goes away
 ```
 
-No config file, no flag flips. Each `vibelog serve` is a long-running process you can cancel cleanly. The Stop hook routes each assistant turn into the right project's `.sync/` based on cwd, so the tabs always show *current* leases.
+No config file, no flag flips. Each `vibelog serve` is a long-running process you can cancel cleanly. Claude's Stop hook and direct MCP clients like Codex record only while that repo's `vibelog serve` lease is alive, so the tabs always show *current* leases and `Ctrl+C` cleanly stops both the tab and the logging lease.
 
 **Static modes (for CI or fixed setups)** — bypass the lease dance with either flag:
 
@@ -123,11 +125,14 @@ vibelog serve -projects "vibelog=/path/a,ledger=/path/b"
 vibelog serve -config /path/to/projects.yaml
 ```
 
-These bind a fixed project list at startup. No leasing, no auto-deregister.
+These bind a fixed project list at startup. They still create per-project logging leases while the process is alive, but they do not auto-register or auto-deregister tabs against another already-running dashboard.
 
-### Wire the Stop hook (records every assistant turn)
+### Agent setup: Claude Code (recommended)
 
-Add this to `~/.claude/settings.json`:
+Claude Code is the recommended path today. It has a Stop hook, so vibelog can record a turn after Claude finishes writing to its transcript. The MCP server adds the structured teach-back that appears on each card.
+
+Add the Stop hook to `~/.claude/settings.json`:
+
 
 ```json
 {
@@ -144,7 +149,7 @@ Add this to `~/.claude/settings.json`:
 
 If `vibelog` isn't on the PATH that Claude Code spawns hooks with, use the absolute path: `/Users/you/go/bin/vibelog observe`.
 
-### MCP server for teach-backs (required)
+Register the MCP server:
 
 ```bash
 claude mcp add -s user vibelog vibelog mcp
@@ -161,27 +166,79 @@ claude mcp list | grep vibelog
 
 This gives the agent a `set_implementation` tool, which it calls at the end of every turn. The curated summary + response text are saved *during* the turn, so they're guaranteed to be there when the Stop hook reads. Without the MCP server you'll see empty cards on most Q&A turns and on longer file-touching turns. Claude Code flushes the assistant's reply to the transcript after the Stop hook fires, so the post-hoc heuristic loses the race.
 
+### Agent setup: Codex (beta)
+
+Codex support is beta. Codex has no Claude-style Stop hook, so it relies on global instructions telling the agent to call the MCP tool directly before ending a turn. This works, but it depends on Codex following that instruction in the active session.
+
+The setup is two pieces:
+
+- Register `vibelog mcp` once so Codex can launch the MCP server.
+- Add a global Codex instruction that uses vibelog only while the current repo has `.sync/serve-active.json`.
+
+Register the MCP server:
+
+```bash
+codex mcp add vibelog -- vibelog mcp
+```
+
+Add the global instruction file:
+
+```bash
+mkdir -p ~/.codex
+
+cat > ~/.codex/vibelog-instructions.md <<'EOF'
+Use the `vibelog` MCP server only when the current project has an active vibelog serve lease.
+
+Activation rule:
+- First check whether `./.sync/serve-active.json` exists in the current project root.
+- If it does not exist, ignore `vibelog` entirely and do not call any `mcp__vibelog__*` tools.
+- If it does exist, then before ending any turn that changed files in this project, call `mcp__vibelog__record_iteration`.
+- You may also call `mcp__vibelog__record_iteration` for meaningful pure-conversation turns that should appear on the dashboard.
+
+When calling `mcp__vibelog__record_iteration`:
+- Pass `summary` as a short past-tense description of what changed.
+- Pass `files_changed` as project-relative paths for files edited this turn.
+- Pass `user_prompt` when available.
+- Pass `implementation` when available so the dashboard can render the detailed teach-back.
+
+Do not call `mcp__vibelog__record_iteration` for projects that do not contain `./.sync/serve-active.json`.
+EOF
+```
+
+Point Codex at that file from `~/.codex/config.toml`:
+
+```toml
+model_instructions_file = "/Users/you/.codex/vibelog-instructions.md"
+```
+
+Use your real home directory path. Codex reads this when a new session starts, so restart Codex after changing it.
+
+Now the runtime flow is:
+
+```text
+cd repo
+vibelog init          # one-time: creates .sync/
+vibelog serve         # per session: creates .sync/serve-active.json
+
+codex session starts
+  -> Codex reads ~/.codex/config.toml
+  -> Codex can launch vibelog mcp
+  -> global instruction checks .sync/serve-active.json
+  -> if present, Codex calls record_iteration before ending turns
+  -> vibelog mcp appends .sync/iterations.jsonl
+  -> vibelog serve renders the row in the dashboard
+```
+
+The important part: the MCP server can be registered globally, but logging is still per-project and only active while `vibelog serve` is alive for that repo. The MCP server also validates that the marker belongs to a live serve process, so stale marker files do not keep logging enabled after a crash.
+
 ---
 
 ## How it works
 
 ```
-                  ┌─────────────────┐
-   you ──prompt──▶│   claude code   │──response──▶ you
-                  └────────┬────────┘
-                           │ Stop hook
-                           ▼
-                  ┌─────────────────┐
-                  │  vibelog observe│ ── writes one row ─▶ .sync/iterations.jsonl
-                  └─────────────────┘
-                                              │
-                                              ▼
-                                     ┌─────────────────┐
-                                     │  vibelog serve  │
-                                     └────────┬────────┘
-                                              │ HTTP
-                                              ▼
-                                    http://localhost:7100
+ Claude Code: prompt → tool call (`set_implementation`) → Stop hook (`vibelog observe`) → `.sync/iterations.jsonl`
+ Codex:       prompt → tool call (`record_iteration`)                                → `.sync/iterations.jsonl`
+ Dashboard:   `vibelog serve` reads the shared `.sync/` history and renders both.
 ```
 
 Every assistant turn becomes one row in `.sync/iterations.jsonl` and one card on the dashboard. The card expands progressively:
@@ -204,14 +261,15 @@ cmd/vibelog/                CLI: init, mcp, observe, serve, watch, ingest-git
 internal/
 ├── model/                  Iteration, Anchor (typed schema)
 ├── store/                  reads .sync/, tolerant of unknown row kinds
-├── observecmd/             Stop-hook handler (transcript → row)
-├── mcpserver/              MCP tools (set_implementation, …)
-├── serve/                  HTTP server + embedded UI
+├── observecmd/             Claude Stop-hook handler (transcript → row)
+├── mcpserver/              MCP tools (record_iteration, set_implementation, …)
+├── serve/                  HTTP server, embedded UI, active logging lease
 ├── gitcmd/                 walks git log (optional ingest-git subcommand)
 ├── initcmd/                scaffolds .sync/
 └── watchcmd/               tails .sync/iterations.jsonl in the terminal
 .sync/                      per-project state (add to .gitignore)
 ├── anchor.yaml             project intent (optional, mostly informational)
+├── serve-active.json       lease marker written while vibelog serve is alive
 ├── iterations.jsonl        one row per assistant turn
 └── snapshots/iter-N/...    file contents at iter N (used by the diff endpoint)
 ```
@@ -220,7 +278,7 @@ internal/
 
 ## Status
 
-Early. Daily-driven by the author against `claude code` on Unix. Codex support is in the design pile. Issues and PRs welcome.
+Early. Daily-driven by the author against `claude code` and Codex on Unix. Issues and PRs welcome.
 
 ---
 

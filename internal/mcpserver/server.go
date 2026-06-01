@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -17,7 +18,12 @@ func Serve(projectDir string) error {
 
 	s.AddTool(
 		mcp.NewTool("record_iteration",
-			mcp.WithDescription("Append an iteration to .sync/iterations.jsonl. Call after finishing a meaningful unit of work (typically at end-of-turn) — the iteration records what you just did so the human can stay coupled with the agent's progress."),
+			mcp.WithDescription(
+				"Primary vibelog end-of-turn logging tool. Call this BEFORE ending a turn whenever you changed files in this project, "+
+					"and also for meaningful pure-conversation turns you want on the dashboard. Direct MCP clients such as Codex should use "+
+					"this tool to append the row itself. Transcript-hook clients such as Claude Code may still call set_implementation "+
+					"during the turn, but the actual row append still happens here (directly or via the hook bridge).",
+			),
 			mcp.WithString("summary",
 				mcp.Required(),
 				mcp.Description("One-line past-tense summary of what just happened. Example: 'wired the record_iteration MCP tool with atomic JSONL append'."),
@@ -27,6 +33,18 @@ func Serve(projectDir string) error {
 			),
 			mcp.WithString("transcript_message_id",
 				mcp.Description("UUID of the assistant turn that produced this iteration (for future rollback reconciliation)."),
+			),
+			mcp.WithString("user_prompt",
+				mcp.Description("The user message that triggered this turn. Supplying it gives the dashboard the same prompt-card head text that Claude's stop-hook path captures automatically."),
+			),
+			mcp.WithString("implementation",
+				mcp.Description("The full teach-back or response text for this turn. Direct MCP clients such as Codex should pass it here so the dashboard can render the IMPLEMENTATION/RESPONSE layer without relying on transcript hooks."),
+			),
+			mcp.WithString("agent",
+				mcp.Description("Optional agent label override, e.g. 'codex' or 'claude-code'. Omit unless your client already knows it; vibelog auto-detects when possible."),
+			),
+			mcp.WithString("session_id",
+				mcp.Description("Optional stable session identifier. Omit unless your client already has one; vibelog auto-detects or falls back to a per-process session id."),
 			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -38,9 +56,16 @@ func Serve(projectDir string) error {
 				Summary:             summary,
 				FilesChanged:        req.GetStringSlice("files_changed", nil),
 				TranscriptMessageID: req.GetString("transcript_message_id", ""),
+				UserPrompt:          req.GetString("user_prompt", ""),
+				Implementation:      req.GetString("implementation", ""),
+				Agent:               req.GetString("agent", ""),
+				SessionID:           req.GetString("session_id", ""),
 			}
 			iter, err := RecordIteration(projectDir, args)
 			if err != nil {
+				if errors.Is(err, ErrRecordingInactive) {
+					return mcp.NewToolResultText("vibelog is inactive for this project; start `vibelog serve` here to enable logging"), nil
+				}
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			b, _ := json.Marshal(iter)
@@ -79,13 +104,10 @@ func Serve(projectDir string) error {
 	s.AddTool(
 		mcp.NewTool("set_implementation",
 			mcp.WithDescription(
-				"REQUIRED for every assistant turn that edits files in this project. "+
-					"Submit a structured teach-back describing what you did this turn — "+
-					"shown on the vibelog dashboard's prompt card. Call this BEFORE ending "+
-					"your turn, after all your edits are done. Plain markdown (paragraphs, "+
-					"*emphasis*, `code`, lists) renders cleanly. Multiple calls in one turn "+
-					"→ last call wins. If you forget, the L0 subtitle stays empty and the L1 "+
-					"falls back to your last text block (noisy).\n\n"+
+				"Structured teach-back helper. Claude Code uses this to bridge its Stop-hook flow into vibelog. "+
+					"Direct MCP clients such as Codex can skip this and pass both summary and implementation directly to "+
+					"record_iteration, or call this first and then record_iteration in the same turn. Plain markdown "+
+					"(paragraphs, *emphasis*, `code`, lists) renders cleanly. Multiple calls in one turn → last call wins.\n\n"+
 					"Two fields:\n"+
 					"  - summary: 1-2 line condensed teach-back. Shown as the L0 card "+
 					"subtitle, directly under the user prompt. ~140 chars is the sweet spot.\n"+
@@ -112,9 +134,12 @@ func Serve(projectDir string) error {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			if err := SetImplementation(projectDir, SetImplementationArgs{Summary: summary, Text: text}); err != nil {
+				if errors.Is(err, ErrRecordingInactive) {
+					return mcp.NewToolResultText("vibelog is inactive for this project; start `vibelog serve` here to enable logging"), nil
+				}
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(fmt.Sprintf("teach-back queued (summary=%d chars, text=%d chars) — observe will consume at end of turn", len(summary), len(text))), nil
+			return mcp.NewToolResultText(fmt.Sprintf("teach-back queued (summary=%d chars, text=%d chars) — direct MCP clients should still call record_iteration before ending the turn", len(summary), len(text))), nil
 		},
 	)
 

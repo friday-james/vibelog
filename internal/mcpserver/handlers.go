@@ -20,8 +20,13 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/friday-james/vibelog/internal/model"
+	"github.com/friday-james/vibelog/internal/serve"
 	"github.com/friday-james/vibelog/internal/store"
 )
+
+// ErrRecordingInactive means the project is initialized but does not currently
+// have an active `vibelog serve` lease, so logging is intentionally paused.
+var ErrRecordingInactive = errors.New("vibelog recording inactive")
 
 // RecordIterationArgs is the typed input for the record_iteration tool.
 type RecordIterationArgs struct {
@@ -30,6 +35,8 @@ type RecordIterationArgs struct {
 	TranscriptMessageID string   `json:"transcript_message_id,omitempty"`
 	UserPrompt          string   `json:"user_prompt,omitempty"`
 	Implementation      string   `json:"implementation,omitempty"`
+	Agent               string   `json:"agent,omitempty"`
+	SessionID           string   `json:"session_id,omitempty"`
 }
 
 // UpdateAnchorArgs is the typed input for the update_anchor tool. Each section
@@ -59,8 +66,9 @@ type pendingEnvelope struct {
 
 // RecordIteration appends a new iteration to projectDir/.sync/iterations.jsonl,
 // auto-assigning id (max iteration-kind id + 1), ts (now), kind=iteration,
-// agent="claude-code", and session_id from $CLAUDE_SESSION_ID. The new
-// iteration is validated before write; returns the recorded value.
+// and agent/session metadata inferred from the current MCP client unless the
+// caller overrides them. The new iteration is validated before write; returns
+// the recorded value.
 //
 // Atomicity: append is via O_APPEND on POSIX, which is atomic for writes up to
 // PIPE_BUF (>=4096B on Linux/macOS). A single JSONL line is always smaller, so
@@ -73,6 +81,9 @@ func RecordIteration(projectDir string, args RecordIterationArgs) (*model.Iterat
 		}
 		return nil, fmt.Errorf("load current state: %w", err)
 	}
+	if !serve.IsActive(projectDir) {
+		return nil, ErrRecordingInactive
+	}
 
 	// Idempotency: if the same transcript_message_id is already recorded,
 	// return that entry rather than appending a duplicate. Protects against
@@ -82,6 +93,17 @@ func RecordIteration(projectDir string, args RecordIterationArgs) (*model.Iterat
 			if state.Iterations[i].TranscriptMessageID == args.TranscriptMessageID {
 				return &state.Iterations[i], nil
 			}
+		}
+	}
+
+	meta := resolveAgentMetadata(args.Agent, args.SessionID)
+	if strings.TrimSpace(args.Summary) == "" || strings.TrimSpace(args.Implementation) == "" {
+		pendingSummary, pendingText := consumePendingImplementation(projectDir, meta.SessionID)
+		if strings.TrimSpace(args.Summary) == "" {
+			args.Summary = pendingSummary
+		}
+		if strings.TrimSpace(args.Implementation) == "" {
+			args.Implementation = pendingText
 		}
 	}
 
@@ -102,8 +124,8 @@ func RecordIteration(projectDir string, args RecordIterationArgs) (*model.Iterat
 		Kind:                model.KindIteration,
 		Summary:             args.Summary,
 		FilesChanged:        args.FilesChanged,
-		Agent:               "claude-code",
-		SessionID:           os.Getenv("CLAUDE_SESSION_ID"),
+		Agent:               meta.Agent,
+		SessionID:           meta.SessionID,
 		TranscriptMessageID: args.TranscriptMessageID,
 		UserPrompt:          args.UserPrompt,
 		Implementation:      args.Implementation,
@@ -174,7 +196,6 @@ func atomicCopyFile(src, dst string) error {
 	return os.Rename(tmpName, dst)
 }
 
-
 // UpdateAnchor applies optional JSON-encoded patches to one or more sections
 // of anchor.yaml (intent, approach, now). Each section is replaced wholesale
 // if provided. Empty section args leave that section unchanged. The whole
@@ -238,13 +259,20 @@ func atomicWrite(path string, data []byte) error {
 }
 
 // SetImplementation writes a teach-back envelope to
-// .sync/pending_implementation.txt. observe (running in the Stop hook)
-// consumes the envelope and applies the text to that turn's iteration
-// record, then deletes the file. Multi-call-per-turn → last call wins.
+// .sync/pending_implementation.txt. Transcript-hook integrations (Claude Code)
+// consume the envelope later; direct MCP clients can also write it first and
+// let RecordIteration pick it up in the same session. Multi-call-per-turn →
+// last call wins.
 //
 // Envelope carries session_id + timestamp so observe can reject stale
 // pending files (left over from a crashed observe in a previous turn).
 func SetImplementation(projectDir string, args SetImplementationArgs) error {
+	if _, err := os.Stat(filepath.Join(projectDir, ".sync")); err != nil {
+		return fmt.Errorf(".sync/ not initialized at %s — run `vibelog init`", projectDir)
+	}
+	if !serve.IsActive(projectDir) {
+		return ErrRecordingInactive
+	}
 	if strings.TrimSpace(args.Text) == "" {
 		return fmt.Errorf("text is required")
 	}
@@ -254,15 +282,36 @@ func SetImplementation(projectDir string, args SetImplementationArgs) error {
 	env := pendingEnvelope{
 		Summary:   args.Summary,
 		Text:      args.Text,
-		SessionID: os.Getenv("CLAUDE_SESSION_ID"),
+		SessionID: resolveAgentMetadata("", "").SessionID,
 		Ts:        time.Now().UTC().Format(time.RFC3339),
 	}
 	data, err := json.Marshal(env)
 	if err != nil {
 		return fmt.Errorf("marshal envelope: %w", err)
 	}
-	if _, err := os.Stat(filepath.Join(projectDir, ".sync")); err != nil {
-		return fmt.Errorf(".sync/ not initialized at %s — run `vibelog init`", projectDir)
-	}
 	return atomicWrite(filepath.Join(projectDir, ".sync", "pending_implementation.txt"), data)
+}
+
+func consumePendingImplementation(projectDir, currentSessionID string) (string, string) {
+	path := filepath.Join(projectDir, ".sync", "pending_implementation.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", ""
+	}
+	defer os.Remove(path)
+
+	var env pendingEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return "", ""
+	}
+	if strings.TrimSpace(env.Text) == "" {
+		return "", ""
+	}
+	if currentSessionID != "" && env.SessionID != "" && env.SessionID != currentSessionID {
+		return "", ""
+	}
+	if t, err := time.Parse(time.RFC3339, env.Ts); err == nil && time.Since(t) > 60*time.Second {
+		return "", ""
+	}
+	return strings.TrimSpace(env.Summary), strings.TrimSpace(env.Text)
 }

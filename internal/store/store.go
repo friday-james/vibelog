@@ -1,7 +1,7 @@
 // Package store reads the three .sync/ files into a validated *model.State.
 //
-// Load is read-only and synchronous. It is the only path Phase 0 exercises;
-// writers (MCP, Stop hook + sub-agent) land in Phase 5 and live elsewhere.
+// Load is read-only and synchronous. Writers such as the MCP server and
+// transcript observer live outside this package.
 package store
 
 import (
@@ -57,7 +57,7 @@ func readYAML(path string, dst any) error {
 // readJSONL is forgiving on a per-row basis: an iteration written by a NEWER
 // vibelog binary (e.g. a kind this binary doesn't yet recognise) is dropped
 // with a stderr warning rather than failing the whole load. Without this, a
-// single-row schema mismatch turns every Stop hook subsequent into an error
+// single-row schema mismatch turns every future agent hook into an error
 // — including hooks from older sessions whose binary is out of date relative
 // to the project's .sync/.
 func readJSONL(path string) ([]model.Iteration, error) {

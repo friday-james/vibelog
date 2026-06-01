@@ -34,6 +34,15 @@ func initProject(t *testing.T) string {
 	return tmp
 }
 
+func activateProject(t *testing.T, dir string) func() {
+	t.Helper()
+	release, err := serve.AcquireActiveMarker(dir)
+	if err != nil {
+		t.Fatalf("activate marker: %v", err)
+	}
+	return release
+}
+
 // writeTranscript drops a JSONL transcript into a tmp file. The Stop-hook
 // payload built by buildStopPayload points at this file.
 func writeTranscript(t *testing.T, lines []string) string {
@@ -110,6 +119,7 @@ func TestE2E_ObserveRecordsAndServeReturns(t *testing.T) {
 	t.Setenv("CLAUDE_SESSION_ID", sessionID)
 
 	project := initProject(t)
+	defer activateProject(t, project)()
 	transcript := writeTranscript(t, []string{
 		`{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"add a helper"}]}}`,
 		`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[` +
@@ -188,6 +198,7 @@ func TestE2E_SetImplementationEnvelopePopulatesIterationFields(t *testing.T) {
 	t.Setenv("CLAUDE_SESSION_ID", sessionID)
 
 	project := initProject(t)
+	defer activateProject(t, project)()
 
 	// During the (simulated) turn, the agent calls set_implementation. This
 	// writes the envelope under .sync/pending_implementation.txt.
@@ -398,7 +409,6 @@ func TestE2E_MultiProjectServeRoutesPerProject(t *testing.T) {
 		t.Errorf("/p/alpha: want 301, got %d", rr2.StatusCode)
 	}
 }
-
 
 // ---------- Test 5: lease lifecycle ----------
 

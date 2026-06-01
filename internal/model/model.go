@@ -18,18 +18,18 @@ type State struct {
 // hasn't subsequently overwritten — i.e., "what's still yours, not yet
 // committed." Drives the leading card on the dashboard.
 type Drift struct {
-	HeadSHA   string       `json:"head_sha,omitempty"`   // short HEAD SHA at compute time
-	StartedAt time.Time    `json:"started_at,omitempty"` // earliest mtime among drifted files (best-effort)
-	Files     []DriftFile  `json:"files"`                // sorted by Path
-	NotGit    bool         `json:"not_git,omitempty"`    // set when projectDir has no .git/
+	HeadSHA   string      `json:"head_sha,omitempty"`   // short HEAD SHA at compute time
+	StartedAt time.Time   `json:"started_at,omitempty"` // earliest mtime among drifted files (best-effort)
+	Files     []DriftFile `json:"files"`                // sorted by Path
+	NotGit    bool        `json:"not_git,omitempty"`    // set when projectDir has no .git/
 }
 
 // DriftFile is one file currently in drift state.
 type DriftFile struct {
 	Path      string `json:"path"`
-	Status    string `json:"status"`              // "M" | "D" | "?" | "R" | "A"
+	Status    string `json:"status"`               // "M" | "D" | "?" | "R" | "A"
 	ShortStat string `json:"short_stat,omitempty"` // "+14 −3" or "new" / "deleted" / "binary"
-	OldPath   string `json:"old_path,omitempty"`  // set when Status == "R"
+	OldPath   string `json:"old_path,omitempty"`   // set when Status == "R"
 }
 
 func (s *State) Validate() error {
@@ -138,7 +138,6 @@ func (n *Now) Validate() error {
 	return nil
 }
 
-
 // ----- Evidence (discriminated union on Type) -----
 
 type EvidenceType string
@@ -176,13 +175,13 @@ const (
 type Evidence struct {
 	Type EvidenceType `yaml:"type" json:"type"`
 
-	Path     string      `yaml:"path,omitempty" json:"path,omitempty"`           // code, test, doc, decision, benchmark
-	Line     int         `yaml:"line,omitempty" json:"line,omitempty"`           // code
-	Polarity Polarity    `yaml:"polarity,omitempty" json:"polarity,omitempty"`   // code, test
-	Note     string      `yaml:"note,omitempty" json:"note,omitempty"`           // any
-	Ref      string      `yaml:"ref,omitempty" json:"ref,omitempty"`             // metric
-	SHA      string      `yaml:"sha,omitempty" json:"sha,omitempty"`             // commit
-	Kind     MissingKind `yaml:"kind,omitempty" json:"kind,omitempty"`           // missing
+	Path     string      `yaml:"path,omitempty" json:"path,omitempty"`         // code, test, doc, decision, benchmark
+	Line     int         `yaml:"line,omitempty" json:"line,omitempty"`         // code
+	Polarity Polarity    `yaml:"polarity,omitempty" json:"polarity,omitempty"` // code, test
+	Note     string      `yaml:"note,omitempty" json:"note,omitempty"`         // any
+	Ref      string      `yaml:"ref,omitempty" json:"ref,omitempty"`           // metric
+	SHA      string      `yaml:"sha,omitempty" json:"sha,omitempty"`           // commit
+	Kind     MissingKind `yaml:"kind,omitempty" json:"kind,omitempty"`         // missing
 }
 
 func (e *Evidence) Validate() error {
@@ -250,20 +249,19 @@ const (
 // (kind, id), not id alone.
 //
 // The supersede fields (TranscriptMessageID, FileHashes, SupersededAt,
-// SupersededReason) support post-hoc reconciliation when Claude Code's
-// double-Esc rollback or a file-level rollback (git checkout, editor undo,
-// etc.) leaves .sync/ entries that no longer reflect reality. Writers
-// populate the anchors; a watcher marks entries superseded when anchors
-// diverge.
+// SupersededReason) support post-hoc reconciliation when an agent
+// conversation rollback or a file-level rollback (git checkout, editor undo,
+// etc.) leaves .sync/ entries that no longer reflect reality. Writers populate
+// the anchors; a watcher marks entries superseded when anchors diverge.
 type Iteration struct {
-	ID             int           `json:"id"`
-	Ts             time.Time     `json:"ts"`
-	Kind           IterationKind `json:"kind"`
-	Summary        string        `json:"summary,omitempty"`
-	FilesChanged   []string      `json:"files_changed,omitempty"`
-	Agent          string        `json:"agent,omitempty"`
-	SessionID      string        `json:"session_id,omitempty"` // $CLAUDE_SESSION_ID for kind=iteration
-	SHA            string        `json:"sha,omitempty"`        // required for kind=commit
+	ID           int           `json:"id"`
+	Ts           time.Time     `json:"ts"`
+	Kind         IterationKind `json:"kind"`
+	Summary      string        `json:"summary,omitempty"`
+	FilesChanged []string      `json:"files_changed,omitempty"`
+	Agent        string        `json:"agent,omitempty"`
+	SessionID    string        `json:"session_id,omitempty"` // agent session id for kind=iteration
+	SHA          string        `json:"sha,omitempty"`        // required for kind=commit
 
 	// Supersede anchors + state (all optional)
 	TranscriptMessageID string            `json:"transcript_message_id,omitempty"` // assistant turn UUID — for conversation-rollback detection
@@ -271,8 +269,8 @@ type Iteration struct {
 	SupersededAt        *time.Time        `json:"superseded_at,omitempty"`
 	SupersededReason    string            `json:"superseded_reason,omitempty"` // "rollback" | "file_diverged" | "manual"
 
-	UserPrompt     string `json:"user_prompt,omitempty"`     // the user's actual message that triggered this turn (head text in the UI)
-	Implementation string `json:"implementation,omitempty"`  // full concatenated assistant text from the turn — the L1 teach-back
+	UserPrompt     string `json:"user_prompt,omitempty"`    // the user's actual message that triggered this turn (head text in the UI)
+	Implementation string `json:"implementation,omitempty"` // full concatenated assistant text from the turn — the L1 teach-back
 }
 
 func (i *Iteration) Validate() error {

@@ -150,7 +150,15 @@ func runServe(args []string) {
 		fmt.Fprintln(os.Stderr, "vibelog serve: -projects:", err)
 		os.Exit(1)
 	} else if len(projects) > 0 {
-		if err := serve.RunMulti(projects, addr); err != nil {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		releaseMarkers, err := acquireActiveMarkers(projects)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "vibelog serve:", err)
+			os.Exit(1)
+		}
+		defer releaseMarkers()
+		if err := serve.RunMultiContext(ctx, projects, addr); err != nil {
 			fmt.Fprintln(os.Stderr, "vibelog serve:", err)
 			os.Exit(1)
 		}
@@ -167,7 +175,15 @@ func runServe(args []string) {
 			os.Exit(1)
 		}
 		fmt.Printf("vibelog: %d projects loaded from %s\n", len(projects), *configFlag)
-		if err := serve.RunMulti(projects, addr); err != nil {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		releaseMarkers, err := acquireActiveMarkers(projects)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "vibelog serve:", err)
+			os.Exit(1)
+		}
+		defer releaseMarkers()
+		if err := serve.RunMultiContext(ctx, projects, addr); err != nil {
 			fmt.Fprintln(os.Stderr, "vibelog serve:", err)
 			os.Exit(1)
 		}
@@ -193,6 +209,14 @@ func runServe(args []string) {
 		os.Exit(1)
 	}
 	project := serve.Project{Name: filepath.Base(absDir), Path: absDir}
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	releaseMarkers, err := acquireActiveMarkers([]serve.Project{project})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "vibelog serve:", err)
+		os.Exit(1)
+	}
+	defer releaseMarkers()
 
 	// Is another vibelog already running on this addr? If so, open a long-lived
 	// lease — the project stays registered as long as THIS process stays alive.
@@ -200,8 +224,6 @@ func runServe(args []string) {
 	if serve.ProbeRunning(addr) {
 		fmt.Printf("vibelog: leased %s with running serve at http://%s\n", project.Name, addr)
 		fmt.Printf("  → http://%s/p/%s/   (Ctrl+C to deregister)\n", addr, project.Name)
-		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-		defer cancel()
 		if err := serve.LeaseProject(ctx, addr, project); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, "vibelog serve:", err)
 			os.Exit(1)
@@ -211,10 +233,29 @@ func runServe(args []string) {
 	}
 
 	// Nothing running. Start a fresh serve with this project as the seed.
-	if err := serve.RunMulti([]serve.Project{project}, addr); err != nil {
+	if err := serve.RunMultiContext(ctx, []serve.Project{project}, addr); err != nil {
 		fmt.Fprintln(os.Stderr, "vibelog serve:", err)
 		os.Exit(1)
 	}
+}
+
+func acquireActiveMarkers(projects []serve.Project) (func(), error) {
+	releases := make([]func(), 0, len(projects))
+	for _, p := range projects {
+		release, err := serve.AcquireActiveMarker(p.Path)
+		if err != nil {
+			for i := len(releases) - 1; i >= 0; i-- {
+				releases[i]()
+			}
+			return nil, err
+		}
+		releases = append(releases, release)
+	}
+	return func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}, nil
 }
 
 func runIngestGit(args []string) {
@@ -261,6 +302,6 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  mcp [dir]     run MCP stdio server, mutating <dir>/.sync/ (default dir: cwd)")
 	fmt.Fprintln(w, "  watch [dir]   tail <dir>/.sync/iterations.jsonl, pretty-print new entries")
 	fmt.Fprintln(w, "  observe [dir] Stop-hook handler — reads payload from stdin, auto-records iteration")
-	fmt.Fprintln(w, "  serve [dir] [-port N]  host the dashboard UI on http://localhost:7100 (default port)")
+	fmt.Fprintln(w, "  serve [dir] [-port N]  host the dashboard UI on http://localhost:7100 and enable logging while it runs")
 	fmt.Fprintln(w, "  ingest-git [dir] [-n N]  walk git log, append commits as kind=commit iterations")
 }

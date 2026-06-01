@@ -121,11 +121,12 @@ func urlSafeName(s string) bool {
 // atomically so a register call mid-request doesn't tear.
 //
 // Endpoints exposed in addition to the per-project routes:
-//   GET  /api/health         { server: "vibelog", projects: N }   (used by other
-//                              `vibelog serve` invocations to detect us before
-//                              registering — see ProbeAndRegister)
-//   GET  /projects.json      sorted Project list for the UI tab strip
-//   POST /api/projects       { name, path } registers a project, auto-saves
+//
+//	GET  /api/health         { server: "vibelog", projects: N }   (used by other
+//	                           `vibelog serve` invocations to detect us before
+//	                           registering — see ProbeAndRegister)
+//	GET  /projects.json      sorted Project list for the UI tab strip
+//	POST /api/projects       { name, path } registers a project, auto-saves
 //
 // Registrations are ephemeral: a project lives only as long as either the
 // server is alive (for the seed project the server started with) or the
@@ -389,6 +390,11 @@ func LeaseProject(ctx context.Context, addr string, p Project) error {
 // RunMulti is the multi-project counterpart of Run. Same port-fallback
 // behavior: if the preferred port is taken, walks up to the next 20.
 func RunMulti(projects []Project, preferredAddr string) error {
+	return RunMultiContext(context.Background(), projects, preferredAddr)
+}
+
+// RunMultiContext is RunMulti with graceful shutdown when ctx is cancelled.
+func RunMultiContext(ctx context.Context, projects []Project, preferredAddr string) error {
 	srv, err := NewMultiServer(projects)
 	if err != nil {
 		return err
@@ -402,7 +408,23 @@ func RunMulti(projects []Project, preferredAddr string) error {
 	for _, p := range srv.Projects() {
 		fmt.Printf("  /p/%s/  →  %s\n", p.Name, p.Path)
 	}
-	return http.Serve(ln, srv)
+	httpSrv := &http.Server{Handler: srv}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = httpSrv.Shutdown(shutdownCtx)
+		case <-done:
+		}
+	}()
+	err = httpSrv.Serve(ln)
+	if errors.Is(err, http.ErrServerClosed) && ctx.Err() != nil {
+		return nil
+	}
+	return err
 }
 
 // MultiHandler kept for backward compatibility with tests / direct callers.
