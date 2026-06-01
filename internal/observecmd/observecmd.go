@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/friday-james/vibelog/internal/mcpserver"
+	"github.com/friday-james/vibelog/internal/serve"
 )
 
 // dbg appends a diagnostic line to /tmp/vibelog-observe.log so we can see
@@ -57,10 +58,10 @@ type HookPayload struct {
 // and the end of the transcript).
 type Result struct {
 	LastMessageUUID string
-	SummaryText     string   // assistant's final text (the "what I did" subtitle)
+	SummaryText     string // assistant's final text (the "what I did" subtitle)
 	Files           []string
-	UserPrompt      string   // the user's prompt that triggered the turn
-	Implementation  string   // every assistant text block joined — the L1 teach-back
+	UserPrompt      string // the user's prompt that triggered the turn
+	Implementation  string // every assistant text block joined — the L1 teach-back
 }
 
 // Run reads a Stop-hook payload from stdin and records an iteration in
@@ -102,6 +103,10 @@ func Run(projectDir string) error {
 	} else if err != nil {
 		dbg("stat anchor failed: %v", err)
 		return fmt.Errorf("stat anchor: %w", err)
+	}
+	if !serve.IsActive(projectDir) {
+		dbg("project %q has no active serve marker → silent skip", projectDir)
+		return nil
 	}
 
 	// Retry the transcript read with backoff if Implementation comes back
@@ -328,12 +333,12 @@ func AnalyzeTranscript(path string) (Result, error) {
 //
 // Claude Code writes a skill prompt to the transcript like this (NO tags):
 //
-//   Base directory for this skill: /Users/jai/.claude/skills/guide-me
+//	Base directory for this skill: /Users/jai/.claude/skills/guide-me
 //
-//   # Guide Me
-//   ...full skill template body, often thousands of lines...
+//	# Guide Me
+//	...full skill template body, often thousands of lines...
 //
-//   ARGUMENTS: <the args the user actually typed>
+//	ARGUMENTS: <the args the user actually typed>
 //
 // Earlier versions tried to match <command-name> tags — but those tags only
 // appear in the live conversation, not in the persisted transcript. The
@@ -511,7 +516,31 @@ func extractUserPromptText(message json.RawMessage) (string, bool) {
 	if len(parts) == 0 {
 		return "", false
 	}
-	return strings.Join(parts, "\n"), true
+	text := strings.Join(parts, "\n")
+	// Harness-injected synthetic user turns (e.g. <task-notification> emitted
+	// when a background Workflow/Agent completes) are wrapped as type:"user"
+	// indistinguishable from real prompts. Anchor the turn here so we still
+	// record the assistant's response, but return empty so the dashboard
+	// falls back to the summary instead of dumping the meta block.
+	if isHarnessInjectedUserText(text) {
+		return "", true
+	}
+	return text, true
+}
+
+// isHarnessInjectedUserText reports whether the message content is purely a
+// harness meta-block (task-notification, agent-completion, etc.) rather than
+// a user-typed prompt. We only flag messages that BEGIN with a known wrapper
+// tag — a user who pastes a notification will normally frame it with prose,
+// which we want to preserve.
+func isHarnessInjectedUserText(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	for _, prefix := range []string{"<task-notification>", "<task-notification ", "<workflow-notification>"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // suffixUnderProject walks the path's components from the leaf back toward the

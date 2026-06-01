@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/friday-james/vibelog/internal/initcmd"
 	"github.com/friday-james/vibelog/internal/observecmd"
+	"github.com/friday-james/vibelog/internal/serve"
 )
 
 // withStdin temporarily replaces os.Stdin with the given bytes for the
@@ -149,6 +151,51 @@ func TestRun_StopHookActive_NoOp(t *testing.T) {
 	}
 }
 
+func TestRun_SilentSkipWhenServeInactive(t *testing.T) {
+	tmp := t.TempDir()
+	if err := initcmd.Run(tmp); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(tmp, "tr.jsonl")
+	if err := os.WriteFile(transcript, []byte(
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"x"}]}}`+"\n"+
+			`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{"file_path":"foo.go"}}]}}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"session_id":"s","transcript_path":"` + transcript + `","stop_hook_active":false,"hook_event_name":"Stop","cwd":"` + tmp + `"}`
+	withStdin(t, payload, func() {
+		if err := observecmd.Run(""); err != nil {
+			t.Fatalf("inactive project should skip, got %v", err)
+		}
+	})
+	b, err := os.ReadFile(filepath.Join(tmp, ".sync", "iterations.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(strings.TrimSpace(string(b)), "\n") + 1; got != 1 {
+		t.Fatalf("expected only init row while inactive, got %d rows", got)
+	}
+
+	release, err := serve.AcquireActiveMarker(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	withStdin(t, payload, func() {
+		if err := observecmd.Run(""); err != nil {
+			t.Fatalf("active project should record, got %v", err)
+		}
+	})
+	b, err = os.ReadFile(filepath.Join(tmp, ".sync", "iterations.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(strings.TrimSpace(string(b)), "\n") + 1; got != 2 {
+		t.Fatalf("expected init row + observed row while active, got %d rows", got)
+	}
+}
+
 func TestAnalyzeTranscript_DedupesFiles(t *testing.T) {
 	path := writeTranscript(t, []string{
 		`{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"x"}]}}`,
@@ -164,5 +211,55 @@ func TestAnalyzeTranscript_DedupesFiles(t *testing.T) {
 	}
 	if len(res.Files) != 1 {
 		t.Errorf("expected deduped to 1, got %v", res.Files)
+	}
+}
+
+func TestAnalyzeTranscript_SkipsTaskNotificationAsUserPrompt(t *testing.T) {
+	// When a background Workflow/Agent completes, the harness injects a
+	// <task-notification> block as type:"user". observe must anchor the turn
+	// at that synthetic message (so the assistant's response still gets
+	// recorded) but return an empty UserPrompt so the dashboard falls back
+	// to the summary instead of leaking the meta block.
+	path := writeTranscript(t, []string{
+		// previous real turn
+		`{"uuid":"u0","type":"user","message":{"role":"user","content":[{"type":"text","text":"first prompt"}]}}`,
+		`{"uuid":"a0","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first reply"}]}}`,
+		// synthetic user message from harness
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"<task-notification>\n<task-id>wf123</task-id>\n<status>completed</status>\n</task-notification>"}]}}`,
+		// assistant response to the auto-fired turn
+		`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Here's the final article."}]}}`,
+	})
+	res, err := observecmd.AnalyzeTranscript(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.UserPrompt != "" {
+		t.Errorf("expected empty UserPrompt for harness-injected task-notification, got %q", res.UserPrompt)
+	}
+	if res.LastMessageUUID != "a1" {
+		t.Errorf("expected to anchor at the auto-fired turn (uuid a1), got %q", res.LastMessageUUID)
+	}
+	if !strings.Contains(res.Implementation, "Here's the final article.") {
+		t.Errorf("expected Implementation to contain the new turn's assistant text, got %q", res.Implementation)
+	}
+	if strings.Contains(res.Implementation, "first reply") {
+		t.Errorf("Implementation should not include the PREVIOUS turn's assistant text; got %q", res.Implementation)
+	}
+}
+
+func TestAnalyzeTranscript_KeepsUserPastedTaskNotificationWithFraming(t *testing.T) {
+	// A user who PASTES a notification frames it with prose ("look at this:").
+	// That's a real user turn and must not be skipped — only messages that
+	// START with the wrapper tag (i.e. injected by the harness) get scrubbed.
+	path := writeTranscript(t, []string{
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"look at this: <task-notification>...</task-notification> what gives?"}]}}`,
+		`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"that's a workflow result"}]}}`,
+	})
+	res, err := observecmd.AnalyzeTranscript(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.UserPrompt, "look at this:") {
+		t.Errorf("expected to preserve user prose framing, got %q", res.UserPrompt)
 	}
 }
