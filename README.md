@@ -60,25 +60,6 @@ vibelog puts the engineering workflow back: an ordered log you scroll, a per-tur
 
 Requires [Claude Code](https://claude.ai/code) or [Codex CLI](https://help.openai.com/en/articles/11096431), plus git.
 
-### From a release binary (recommended)
-
-Grab the latest tarball for your platform from [Releases](https://github.com/friday-james/vibelog/releases) and drop the binary anywhere on your `$PATH`. One-liner for macOS / Linux:
-
-```bash
-# pick your OS and arch: darwin_arm64, darwin_amd64, linux_amd64, linux_arm64
-VERSION=v0.1.0
-OS_ARCH=darwin_arm64
-
-curl -sSL "https://github.com/friday-james/vibelog/releases/download/${VERSION}/vibelog_${VERSION#v}_${OS_ARCH}.tar.gz" \
-  | tar -xz -C /usr/local/bin vibelog
-```
-
-`vibelog --version` should print the tagged version.
-
-### From source
-
-If you'd rather build from `main`, or you want to hack on it:
-
 ```bash
 # Go 1.25+ required
 go install github.com/friday-james/vibelog/cmd/vibelog@latest
