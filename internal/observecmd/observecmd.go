@@ -25,6 +25,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -67,6 +68,19 @@ type Result struct {
 	// auto-fired turn (e.g. <task-notification> from a background workflow).
 	// There is no human behind such a turn, so Run() skips recording it.
 	SyntheticTurn bool
+
+	// WorkflowTaskID is set when THIS turn invoked the Workflow tool. The ID
+	// is extracted from the Workflow tool_result text ("Task ID: <id>").
+	// The recorded iter carries this as a marker so a later turn can attribute
+	// its diff back via WorkflowMergeOf.
+	WorkflowTaskID string
+
+	// SyntheticWorkflowTaskIDs lists every <task-id> seen inside synthetic
+	// <task-notification> blocks that fell BETWEEN the prior real user turn
+	// and this turn's anchor. When non-empty, Run() looks for a pending
+	// originating iter (one with WorkflowTaskID set and no later merge yet)
+	// to merge this turn's files into.
+	SyntheticWorkflowTaskIDs []string
 }
 
 // Run reads a Stop-hook payload from stdin and records an iteration in
@@ -204,19 +218,89 @@ func Run(projectDir string) error {
 		}
 	}
 
+	// Workflow attribution: if this turn's transcript window contains bridge
+	// task IDs from synthetic <task-notification> blocks, see if any of them
+	// matches a pending originating iter (one that called Workflow but has
+	// no later merge yet). If found, this iter records as a merge — the
+	// dashboard renders the diff under the originating prompt's card.
+	var mergeOf int
+	if len(res.SyntheticWorkflowTaskIDs) > 0 {
+		mergeOf = findPendingMergeTarget(projectDir, res.SyntheticWorkflowTaskIDs)
+		if mergeOf > 0 {
+			dbg("workflow merge: bridge task IDs %v → merging into iter #%d", res.SyntheticWorkflowTaskIDs, mergeOf)
+		}
+	}
+
 	iter, err := mcpserver.RecordIteration(projectDir, mcpserver.RecordIterationArgs{
 		Summary:             summary,
 		FilesChanged:        rel,
 		TranscriptMessageID: res.LastMessageUUID,
 		UserPrompt:          res.UserPrompt,
 		Implementation:      res.Implementation,
+		WorkflowTaskID:      res.WorkflowTaskID,
+		WorkflowMergeOf:     mergeOf,
 	})
 	if err != nil {
 		dbg("RecordIteration failed: %v", err)
 		return err
 	}
-	dbg("recorded iter #%d", iter.ID)
+	dbg("recorded iter #%d (workflow_task_id=%q merge_of=%d)", iter.ID, res.WorkflowTaskID, mergeOf)
 	return nil
+}
+
+// findPendingMergeTarget scans .sync/iterations.jsonl for the most recent
+// iteration whose WorkflowTaskID is in taskIDs AND has no later iter pointing
+// back to it via WorkflowMergeOf. Returns 0 if no eligible target exists.
+// Uses a raw read so it stays decoupled from the store package's strict
+// Validate path.
+func findPendingMergeTarget(projectDir string, taskIDs []string) int {
+	if len(taskIDs) == 0 {
+		return 0
+	}
+	wanted := make(map[string]bool, len(taskIDs))
+	for _, id := range taskIDs {
+		wanted[id] = true
+	}
+	path := filepath.Join(projectDir, ".sync", "iterations.jsonl")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	type row struct {
+		ID              int    `json:"id"`
+		WorkflowTaskID  string `json:"workflow_task_id,omitempty"`
+		WorkflowMergeOf int    `json:"workflow_merge_of,omitempty"`
+	}
+	var rows []row
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var r row
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			continue
+		}
+		rows = append(rows, r)
+	}
+	mergedTargets := make(map[int]bool)
+	for _, r := range rows {
+		if r.WorkflowMergeOf > 0 {
+			mergedTargets[r.WorkflowMergeOf] = true
+		}
+	}
+	// Walk newest → oldest, pick the latest pending iter whose task ID matches.
+	for i := len(rows) - 1; i >= 0; i-- {
+		r := rows[i]
+		if r.WorkflowTaskID == "" || !wanted[r.WorkflowTaskID] {
+			continue
+		}
+		if mergedTargets[r.ID] {
+			continue
+		}
+		return r.ID
+	}
+	return 0
 }
 
 // AnalyzeTranscript walks the JSONL transcript file backward from the end to
@@ -242,14 +326,13 @@ func AnalyzeTranscript(path string) (Result, error) {
 		return Result{}, fmt.Errorf("scan: %w", err)
 	}
 
-	// Step 1: locate the most recent REAL user prompt — not a tool_result.
-	// Claude Code transcripts wrap tool_results as type:"user" messages, so a
-	// naive "first type=user walking backward" picks the latest tool_result
-	// and the resulting "current turn" window is just the trailing chatter
-	// after the last tool, missing all the Edit/Write calls.
+	// Step 1: locate the LATEST user-type entry. If it's a real prompt we
+	// anchor there; if it's a synthetic <task-notification> the whole turn
+	// is harness-fired and Run() will skip recording.
 	startIdx := 0
 	var userPromptText string
 	var syntheticTurn bool
+	anchorIdx := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		var entry struct {
 			Type    string          `json:"type"`
@@ -268,7 +351,38 @@ func AnalyzeTranscript(path string) (Result, error) {
 		userPromptText = text
 		startIdx = i + 1
 		syntheticTurn = synth
+		anchorIdx = i
 		break
+	}
+
+	// Step 1b: if the anchor is a REAL user prompt, scan backward from it to
+	// the PRIOR real prompt and collect any synthetic <task-notification>
+	// task IDs along the way. These are bridge IDs that Run() can use to
+	// attribute this turn's diff back to an originating workflow-invocation
+	// iter (so the dashboard shows the diff on the prompt card that asked
+	// for the workflow, not on the application-turn card).
+	var bridgeTaskIDs []string
+	if !syntheticTurn && anchorIdx > 0 {
+		for j := anchorIdx - 1; j >= 0; j-- {
+			var e struct {
+				Type    string          `json:"type"`
+				Message json.RawMessage `json:"message"`
+			}
+			if err := json.Unmarshal(lines[j], &e); err != nil {
+				continue
+			}
+			if e.Type != "user" {
+				continue
+			}
+			text, ok, synth := extractUserPromptText(e.Message)
+			if !ok {
+				continue
+			}
+			if !synth {
+				break // hit prior real prompt, stop scanning
+			}
+			bridgeTaskIDs = append(bridgeTaskIDs, extractTaskIDsFromNotification(text)...)
+		}
 	}
 
 	// Step 2: walk forward through the turn, collecting files in order and
@@ -326,12 +440,57 @@ func AnalyzeTranscript(path string) (Result, error) {
 						res.Files = append(res.Files, p)
 					}
 				}
+				if b.Name == "Workflow" {
+					// Mark the iter as workflow-originating. The task ID lives
+					// in the matching tool_result (next user-wrapped entry
+					// with type=tool_result and tool_use_id = b's id). We'll
+					// pick it up below in the per-tool_result scan.
+					res.WorkflowTaskID = "" // placeholder; resolved next pass
+				}
 			}
 		}
 		if latestText != "" {
 			res.SummaryText = latestText
 		}
 	}
+	// Second pass: scan this turn's tool_results for a Workflow result.
+	// The Workflow tool's text payload begins with "Workflow launched in
+	// background. Task ID: <id>". Extract the first match within the turn.
+	for i := startIdx; i < len(lines) && res.WorkflowTaskID == ""; i++ {
+		var entry struct {
+			Type    string          `json:"type"`
+			Message json.RawMessage `json:"message"`
+		}
+		if err := json.Unmarshal(lines[i], &entry); err != nil {
+			continue
+		}
+		if entry.Type != "user" {
+			continue
+		}
+		var msg struct {
+			Content json.RawMessage `json:"content"`
+		}
+		if err := json.Unmarshal(entry.Message, &msg); err != nil {
+			continue
+		}
+		var blocks []struct {
+			Type    string `json:"type"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(msg.Content, &blocks); err != nil {
+			continue
+		}
+		for _, b := range blocks {
+			if b.Type != "tool_result" || b.Content == "" {
+				continue
+			}
+			if id := extractWorkflowTaskID(b.Content); id != "" {
+				res.WorkflowTaskID = id
+				break
+			}
+		}
+	}
+	res.SyntheticWorkflowTaskIDs = bridgeTaskIDs
 
 	if len(res.SummaryText) > 200 {
 		res.SummaryText = strings.TrimRight(res.SummaryText[:200], " ") + "…"
@@ -566,6 +725,40 @@ func isHarnessInjectedUserText(s string) bool {
 		}
 	}
 	return false
+}
+
+// taskIDInTag matches the inner content of a <task-id>…</task-id> tag — the
+// harness's task-notification format ALWAYS wraps the id in this element.
+// Restrictive character class on purpose: workflow IDs are lowercase
+// alphanum-and-hyphen, never longer than ~40 chars.
+var taskIDInTagRE = regexp.MustCompile(`<task-id>([a-z0-9-]{1,40})</task-id>`)
+
+// taskIDAfterPrefix matches the "Task ID: <id>" prefix the Workflow tool
+// emits in its tool_result text. Used to attribute the originating turn.
+var taskIDAfterPrefixRE = regexp.MustCompile(`Task ID:\s+([a-z0-9-]{1,40})`)
+
+// extractTaskIDsFromNotification pulls every <task-id> value out of a
+// <task-notification> block. Order is preserved.
+func extractTaskIDsFromNotification(s string) []string {
+	matches := taskIDInTagRE.FindAllStringSubmatch(s, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// extractWorkflowTaskID pulls the first "Task ID: <id>" value out of a
+// tool_result text payload from the Workflow tool.
+func extractWorkflowTaskID(s string) string {
+	m := taskIDAfterPrefixRE.FindStringSubmatch(s)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
 }
 
 // suffixUnderProject walks the path's components from the leaf back toward the

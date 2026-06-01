@@ -2,6 +2,7 @@ package observecmd_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -732,5 +733,265 @@ func TestRun_SyntheticTurnIsIdempotent(t *testing.T) {
 	// consumed as part of skipping a synthetic turn.
 	if _, err := os.Stat(filepath.Join(tmp, ".sync", "pending_implementation.txt")); !os.IsNotExist(err) {
 		t.Errorf("expected no pending_implementation.txt side effect on synthetic skip, stat err=%v", err)
+	}
+}
+// ---------- Workflow attribution (defer + merge) ----------
+
+func TestAnalyzeTranscript_ExtractsWorkflowTaskIDFromToolResult(t *testing.T) {
+	// A turn that invokes the Workflow tool ends up with a tool_result block
+	// whose text begins with "Workflow launched in background. Task ID: <id>".
+	// observe must parse that and report Result.WorkflowTaskID so the iter
+	// row carries it as a pending-merge anchor.
+	path := writeTranscript(t, []string{
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"workflow harden tests"}]}}`,
+		`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[` +
+			`{"type":"text","text":"Launching..."},` +
+			`{"type":"tool_use","id":"toolu_99","name":"Workflow","input":{"script":"..."}}` +
+			`]}}`,
+		`{"uuid":"u2","type":"user","message":{"role":"user","content":[` +
+			`{"type":"tool_result","tool_use_id":"toolu_99","content":"Workflow launched in background. Task ID: wfabc123\nSummary: ...\n"}` +
+			`]}}`,
+		`{"uuid":"a2","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Workflow running in background."}]}}`,
+	})
+	res, err := observecmd.AnalyzeTranscript(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.WorkflowTaskID != "wfabc123" {
+		t.Errorf("expected WorkflowTaskID=wfabc123, got %q", res.WorkflowTaskID)
+	}
+}
+
+func TestAnalyzeTranscript_CollectsBridgeTaskIDsFromSyntheticNotifications(t *testing.T) {
+	// A real follow-up turn whose transcript window contains synthetic
+	// <task-notification> blocks between the prior real prompt and this
+	// turn should expose those task IDs via SyntheticWorkflowTaskIDs so
+	// Run() can locate the originating pending iter.
+	path := writeTranscript(t, []string{
+		// Prior real turn (the workflow-invoking one)
+		`{"uuid":"u0","type":"user","message":{"role":"user","content":[{"type":"text","text":"workflow harden tests"}]}}`,
+		`{"uuid":"a0","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"launched"}]}}`,
+		// Synthetic bridge (workflow completion notification)
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>wfabc123</task-id>\n<status>completed</status>\n</task-notification>"}}`,
+		`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"got result"}]}}`,
+		// THIS turn (the application turn)
+		`{"uuid":"u2","type":"user","message":{"role":"user","content":[{"type":"text","text":"push the changes"}]}}`,
+		`{"uuid":"a2","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"pushed"}]}}`,
+	})
+	res, err := observecmd.AnalyzeTranscript(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.SyntheticWorkflowTaskIDs) != 1 || res.SyntheticWorkflowTaskIDs[0] != "wfabc123" {
+		t.Errorf("expected bridge task IDs [wfabc123], got %v", res.SyntheticWorkflowTaskIDs)
+	}
+	if res.SyntheticTurn {
+		t.Errorf("expected SyntheticTurn=false for the application turn (anchored at real prompt)")
+	}
+	if res.UserPrompt != "push the changes" {
+		t.Errorf("expected to anchor at 'push the changes', got %q", res.UserPrompt)
+	}
+}
+
+func TestRun_WorkflowMergeAttributesDiffToOriginatingIter(t *testing.T) {
+	// End-to-end: a workflow-invoking iter is recorded first. Then a
+	// follow-up turn whose transcript window bridges through a synthetic
+	// notification with the matching task ID gets recorded with
+	// WorkflowMergeOf pointing back to the originating iter.
+	tmp := t.TempDir()
+	if err := initcmd.Run(tmp); err != nil {
+		t.Fatal(err)
+	}
+	release, err := serve.AcquireActiveMarker(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	// Phase 1: record the workflow-invoking turn.
+	transcript1 := filepath.Join(tmp, "tr1.jsonl")
+	if err := os.WriteFile(transcript1, []byte(
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"workflow harden tests"}]}}`+"\n"+
+			`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[`+
+			`{"type":"text","text":"Launching..."},`+
+			`{"type":"tool_use","id":"toolu_x","name":"Workflow","input":{"script":"..."}}`+
+			`]}}`+"\n"+
+			`{"uuid":"u2","type":"user","message":{"role":"user","content":[`+
+			`{"type":"tool_result","tool_use_id":"toolu_x","content":"Workflow launched in background. Task ID: wfabc123\n"}`+
+			`]}}`+"\n"+
+			`{"uuid":"a2","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"running"}]}}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload1 := `{"session_id":"s","transcript_path":"` + transcript1 + `","stop_hook_active":false,"hook_event_name":"Stop","cwd":"` + tmp + `"}`
+	withStdin(t, payload1, func() {
+		if err := observecmd.Run(""); err != nil {
+			t.Fatalf("phase 1 record: %v", err)
+		}
+	})
+
+	// Phase 2: a later turn whose transcript bridges through the synthetic
+	// notification with task ID wfabc123. Includes a file edit (touched/diff).
+	transcript2 := filepath.Join(tmp, "tr2.jsonl")
+	if err := os.WriteFile(transcript2, []byte(
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"workflow harden tests"}]}}`+"\n"+
+			`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"launched"}]}}`+"\n"+
+			`{"uuid":"u2","type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>wfabc123</task-id>\n</task-notification>"}}`+"\n"+
+			`{"uuid":"a2","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ack"}]}}`+"\n"+
+			`{"uuid":"u3","type":"user","message":{"role":"user","content":[{"type":"text","text":"push the changes"}]}}`+"\n"+
+			`{"uuid":"a3","type":"assistant","message":{"role":"assistant","content":[`+
+			`{"type":"tool_use","name":"Edit","input":{"file_path":"foo.go"}},`+
+			`{"type":"text","text":"applied"}`+
+			`]}}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload2 := `{"session_id":"s","transcript_path":"` + transcript2 + `","stop_hook_active":false,"hook_event_name":"Stop","cwd":"` + tmp + `"}`
+	withStdin(t, payload2, func() {
+		if err := observecmd.Run(""); err != nil {
+			t.Fatalf("phase 2 record: %v", err)
+		}
+	})
+
+	// Assertions: read iterations.jsonl and find the two relevant rows.
+	b, err := os.ReadFile(filepath.Join(tmp, ".sync", "iterations.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct {
+		ID              int      `json:"id"`
+		Kind            string   `json:"kind"`
+		WorkflowTaskID  string   `json:"workflow_task_id,omitempty"`
+		WorkflowMergeOf int      `json:"workflow_merge_of,omitempty"`
+		FilesChanged    []string `json:"files_changed,omitempty"`
+		UserPrompt      string   `json:"user_prompt,omitempty"`
+	}
+	var rows []row
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if line == "" {
+			continue
+		}
+		var r row
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		rows = append(rows, r)
+	}
+	var origin, application *row
+	for i := range rows {
+		switch {
+		case rows[i].WorkflowTaskID == "wfabc123":
+			origin = &rows[i]
+		case rows[i].UserPrompt == "push the changes":
+			application = &rows[i]
+		}
+	}
+	if origin == nil {
+		t.Fatalf("originating iter not found in %d rows", len(rows))
+	}
+	if application == nil {
+		t.Fatalf("application iter not found in %d rows", len(rows))
+	}
+	if application.WorkflowMergeOf != origin.ID {
+		t.Errorf("expected application.WorkflowMergeOf=%d, got %d", origin.ID, application.WorkflowMergeOf)
+	}
+	if len(application.FilesChanged) != 1 || application.FilesChanged[0] != "foo.go" {
+		t.Errorf("expected application.FilesChanged=[foo.go], got %v", application.FilesChanged)
+	}
+}
+
+func TestRun_WorkflowMergeAlreadyMerged_NoDoubleAttribute(t *testing.T) {
+	// Once an originating iter has a downstream merge, a second
+	// application turn (same bridge task ID) must NOT merge again.
+	tmp := t.TempDir()
+	if err := initcmd.Run(tmp); err != nil {
+		t.Fatal(err)
+	}
+	release, err := serve.AcquireActiveMarker(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	// Phase 1: originating
+	transcript1 := filepath.Join(tmp, "tr1.jsonl")
+	if err := os.WriteFile(transcript1, []byte(
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"workflow X"}]}}`+"\n"+
+			`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[`+
+			`{"type":"tool_use","id":"toolu_x","name":"Workflow","input":{}}`+
+			`]}}`+"\n"+
+			`{"uuid":"u2","type":"user","message":{"role":"user","content":[`+
+			`{"type":"tool_result","tool_use_id":"toolu_x","content":"Workflow launched in background. Task ID: wfxyz\n"}`+
+			`]}}`+"\n"+
+			`{"uuid":"a2","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"running"}]}}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withStdin(t, `{"session_id":"s","transcript_path":"`+transcript1+`","stop_hook_active":false,"hook_event_name":"Stop","cwd":"`+tmp+`"}`, func() {
+		_ = observecmd.Run("")
+	})
+
+	// Phase 2: first application turn (the legitimate merge)
+	transcript2 := filepath.Join(tmp, "tr2.jsonl")
+	if err := os.WriteFile(transcript2, []byte(
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":[{"type":"text","text":"workflow X"}]}}`+"\n"+
+			`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"a"}]}}`+"\n"+
+			`{"uuid":"u2","type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>wfxyz</task-id>\n</task-notification>"}}`+"\n"+
+			`{"uuid":"a2","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ack"}]}}`+"\n"+
+			`{"uuid":"u3","type":"user","message":{"role":"user","content":[{"type":"text","text":"apply"}]}}`+"\n"+
+			`{"uuid":"a3","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{"file_path":"a.go"}}]}}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withStdin(t, `{"session_id":"s","transcript_path":"`+transcript2+`","stop_hook_active":false,"hook_event_name":"Stop","cwd":"`+tmp+`"}`, func() {
+		_ = observecmd.Run("")
+	})
+
+	// Phase 3: a second application turn whose transcript STILL contains the
+	// same bridge task ID. This is the double-attribute risk and must NOT
+	// merge.
+	transcript3 := filepath.Join(tmp, "tr3.jsonl")
+	if err := os.WriteFile(transcript3, []byte(
+		`{"uuid":"u1b","type":"user","message":{"role":"user","content":[{"type":"text","text":"some other work"}]}}`+"\n"+
+			`{"uuid":"u2b","type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>wfxyz</task-id>\n</task-notification>"}}`+"\n"+
+			`{"uuid":"u3b","type":"user","message":{"role":"user","content":[{"type":"text","text":"second apply"}]}}`+"\n"+
+			`{"uuid":"a3b","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{"file_path":"b.go"}}]}}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withStdin(t, `{"session_id":"s","transcript_path":"`+transcript3+`","stop_hook_active":false,"hook_event_name":"Stop","cwd":"`+tmp+`"}`, func() {
+		_ = observecmd.Run("")
+	})
+
+	// Read the rows; the second-apply turn must have WorkflowMergeOf==0.
+	b, err := os.ReadFile(filepath.Join(tmp, ".sync", "iterations.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct {
+		ID              int    `json:"id"`
+		UserPrompt      string `json:"user_prompt,omitempty"`
+		WorkflowMergeOf int    `json:"workflow_merge_of,omitempty"`
+	}
+	var rows []row
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if line == "" {
+			continue
+		}
+		var r row
+		_ = json.Unmarshal([]byte(line), &r)
+		rows = append(rows, r)
+	}
+	var second *row
+	for i := range rows {
+		if rows[i].UserPrompt == "second apply" {
+			second = &rows[i]
+		}
+	}
+	if second == nil {
+		t.Fatalf("second-apply iter not found")
+	}
+	if second.WorkflowMergeOf != 0 {
+		t.Errorf("expected second.WorkflowMergeOf=0 (no double-merge), got %d", second.WorkflowMergeOf)
 	}
 }

@@ -271,6 +271,17 @@ type Iteration struct {
 
 	UserPrompt     string `json:"user_prompt,omitempty"`    // the user's actual message that triggered this turn (head text in the UI)
 	Implementation string `json:"implementation,omitempty"` // full concatenated assistant text from the turn — the L1 teach-back
+
+	// Workflow attribution. WorkflowTaskID is set on the turn that INVOKED a
+	// background Workflow tool call; that turn typically has no files_changed
+	// because the work happens asynchronously. WorkflowMergeOf is set on a
+	// LATER turn that applies the workflow's result; it points back to the
+	// originating iter's ID so the dashboard can render the diff under the
+	// originating prompt instead of the application turn. Append-only is
+	// preserved: the original iter is never mutated, the merge is a new row
+	// that the UI groups under the original.
+	WorkflowTaskID  string `json:"workflow_task_id,omitempty"`
+	WorkflowMergeOf int    `json:"workflow_merge_of,omitempty"`
 }
 
 func (i *Iteration) Validate() error {

@@ -105,6 +105,18 @@ function render(s) {
   // of the same files within CONCURRENCY_WINDOW_MS.
   concurrencyIndex = buildConcurrencyIndex(feed);
 
+  // Workflow merge map: targetID → the merging iter. When iter X has
+  // workflow_merge_of=Y, X is rendered AS PART OF Y (files/diff/teach-back
+  // surfaced on Y's card) and X itself is hidden from the feed. This keeps
+  // the prompt-card model intact: the prompt that asked for the workflow
+  // owns the diff that landed afterwards.
+  const mergeMap = {};
+  for (const it of feed) {
+    if (it.workflow_merge_of) {
+      mergeMap[it.workflow_merge_of] = it;
+    }
+  }
+
   // No count here — the header sync-state already reports "X prompts · last …".
   app.appendChild(sectionHeader('PROMPTS · WHAT THE AGENT DID', ''));
   if (feed.length === 0) {
@@ -114,7 +126,12 @@ function render(s) {
       // Drop external_edit cards from the main feed — they're history-only
       // now; live drift lives in the leading card above.
       if (it.kind === 'external_edit') return;
-      app.appendChild(deltaCard(it));
+      // Skip merge-source iters: their content lives on the merge target's card.
+      if (it.workflow_merge_of) return;
+      // If THIS iter is a merge target, fold the merging iter's content into it.
+      const merged = mergeMap[it.id];
+      const renderIt = merged ? applyWorkflowMerge(it, merged) : it;
+      app.appendChild(deltaCard(renderIt));
     });
   }
 
@@ -248,6 +265,26 @@ function externalEditCard(it) {
   });
 }
 
+// applyWorkflowMerge folds the merging iter (the application turn) into the
+// originating iter (the workflow-invocation turn) for rendering only. The
+// returned object reads as the originating iter for identity (id, ts, user
+// prompt) but exposes the merging iter's diff content (files_changed +
+// implementation + summary fallback) so the card surfaces what landed.
+// diff_iter_id is the merging iter's id so /prompt/<id>/diff resolves to
+// its snapshots, where the actual file changes live.
+function applyWorkflowMerge(origin, merging) {
+  const mergedFiles = (merging.files_changed || []).slice();
+  const mergedImpl = merging.implementation || origin.implementation || '';
+  return {
+    ...origin,
+    files_changed: mergedFiles.length ? mergedFiles : (origin.files_changed || []),
+    implementation: mergedImpl,
+    summary: origin.summary || merging.summary || '',
+    diff_iter_id: merging.id,
+    workflow_merged_label: `merged from #${merging.id}`,
+  };
+}
+
 function deltaCard(it) {
   const files = it.files_changed || [];
   const head = it.user_prompt && it.user_prompt.trim() ? it.user_prompt : (it.summary || '(no prompt captured)');
@@ -270,6 +307,10 @@ function deltaCard(it) {
     }
   }
   const fileHint = files.length > 0 ? ` · ${files.length} file${files.length === 1 ? '' : 's'}` : '';
+  // Workflow merge marker: when this card's diff was applied by a later
+  // turn that we folded in, surface a small chip in the meta line so the
+  // reader knows the diff arrived asynchronously.
+  const workflowSuffix = it.workflow_merged_label ? ` · ${it.workflow_merged_label}` : '';
 
   // Build the reveal layers in order. Pure-conversation turns get a RESPONSE
   // layer (renamed from IMPLEMENTATION since the wording would mislead). File-
@@ -295,7 +336,7 @@ function deltaCard(it) {
         `<div class="diff-files">` +
         files.map(f =>
           `<details class="file-diff"><summary><code>${escapeHTML(f)}</code></summary>` +
-          `<div class="diff" data-iter-id="${it.id}" data-file-path="${escapeHTML(f)}"><div class="diff-head">expand to load diff</div></div>` +
+          `<div class="diff" data-iter-id="${it.diff_iter_id || it.id}" data-file-path="${escapeHTML(f)}"><div class="diff-head">expand to load diff</div></div>` +
           `</details>`
         ).join('') +
         `</div>`,
@@ -309,7 +350,7 @@ function deltaCard(it) {
 
   return buildCard({
     statusClass: 'delta', cardID: 'iter-' + it.id, icon: '',
-    head, subtitle, badgesHTML, metaTsISO: it.ts, metaSuffix: fileHint,
+    head, subtitle, badgesHTML, metaTsISO: it.ts, metaSuffix: fileHint + workflowSuffix,
     initialDepth: 0, layers,
   });
 }

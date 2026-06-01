@@ -37,6 +37,8 @@ type RecordIterationArgs struct {
 	Implementation      string   `json:"implementation,omitempty"`
 	Agent               string   `json:"agent,omitempty"`
 	SessionID           string   `json:"session_id,omitempty"`
+	WorkflowTaskID      string   `json:"workflow_task_id,omitempty"`
+	WorkflowMergeOf     int      `json:"workflow_merge_of,omitempty"`
 }
 
 // UpdateAnchorArgs is the typed input for the update_anchor tool. Each section
@@ -129,6 +131,8 @@ func RecordIteration(projectDir string, args RecordIterationArgs) (*model.Iterat
 		TranscriptMessageID: args.TranscriptMessageID,
 		UserPrompt:          args.UserPrompt,
 		Implementation:      args.Implementation,
+		WorkflowTaskID:      args.WorkflowTaskID,
+		WorkflowMergeOf:     args.WorkflowMergeOf,
 	}
 	if err := iter.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid iteration: %w", err)
