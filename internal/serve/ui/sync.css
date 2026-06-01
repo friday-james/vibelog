@@ -14,12 +14,17 @@
   --text-3: #8a877d;
   --text-4: #5e5b54;
 
-  --amber: #d4a14a;
-  --amber-bright: #efb85d;
-  --amber-dim: #806237;
-  --amber-bg: rgba(212, 161, 74, 0.07);
-  --amber-bg-2: rgba(212, 161, 74, 0.13);
-  --amber-border: rgba(212, 161, 74, 0.28);
+  /* Accent palette: fern green, AAA contrast on dark bg.
+     UX rationale: mid-saturation HSL(133, 30%, 55%), held just shy of teal,
+     desaturated enough to sit quietly in peripheral vision.
+     CSS-var names kept as --amber-* for blast-radius — the variables are now
+     green but every existing reference still works. */
+  --amber: #6BAE7A;
+  --amber-bright: #85C293;
+  --amber-dim: #3F6A4A;
+  --amber-bg: rgba(107, 174, 122, 0.07);
+  --amber-bg-2: rgba(107, 174, 122, 0.13);
+  --amber-border: rgba(107, 174, 122, 0.28);
 
   --green: #7aa86e;
   --green-dim: #4d6b46;
@@ -43,7 +48,7 @@ html, body {
   height: 100vh; overflow: hidden;
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
   background-image:
-    radial-gradient(ellipse 50% 30% at 10% 0%, rgba(212, 161, 74, 0.025), transparent 70%),
+    radial-gradient(ellipse 50% 30% at 10% 0%, rgba(107, 174, 122, 0.025), transparent 70%),
     radial-gradient(ellipse 40% 25% at 90% 100%, rgba(108, 147, 179, 0.018), transparent 70%);
 }
 body::before {
@@ -182,9 +187,9 @@ body::before {
 /* Flash highlight when a card is scrolled to via rail click */
 .card.flash { animation: cardFlash 1.2s ease; }
 @keyframes cardFlash {
-  0%   { box-shadow: 0 0 0 0 rgba(212, 161, 74, 0.6); }
-  30%  { box-shadow: 0 0 0 4px rgba(212, 161, 74, 0.5); }
-  100% { box-shadow: 0 0 0 0 rgba(212, 161, 74, 0); }
+  0%   { box-shadow: 0 0 0 0 rgba(107, 174, 122, 0.6); }
+  30%  { box-shadow: 0 0 0 4px rgba(107, 174, 122, 0.5); }
+  100% { box-shadow: 0 0 0 0 rgba(107, 174, 122, 0); }
 }
 
 /* MAIN */

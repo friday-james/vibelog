@@ -165,7 +165,7 @@ function sectionHeader(title, count) {
 // palette is small (5 entries) and the choice is deterministic per id so it
 // stays consistent across renders. Only invoked when ≥2 distinct sessions
 // are present, so the chip never appears in single-session usage.
-const SESSION_COLORS = ['#d4a14a', '#6c93b3', '#7aa86e', '#c46a52', '#b56cb3'];
+const SESSION_COLORS = ['#6BAE7A', '#6c93b3', '#c46a52', '#b56cb3', '#cfa14a'];
 function buildSessionPalette(sessionIds) {
   const map = {};
   for (const sid of sessionIds) {
