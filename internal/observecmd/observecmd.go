@@ -142,12 +142,27 @@ func Run(projectDir string) error {
 		return fmt.Errorf("analyze transcript: %w", err)
 	}
 	// Synthetic turns (e.g. <task-notification> auto-fired by the harness when
-	// a background Workflow completes) have no human behind them. Skip
-	// recording entirely — the assistant's response to the notification is
-	// just bookkeeping noise, not a real iteration of the user's work.
+	// a background Workflow completes) have no human behind them. There are
+	// two sub-cases:
+	//
+	//   no file edits → pure bookkeeping; skip entirely.
+	//   file edits    → the assistant applied the workflow's result directly
+	//                   in the auto-fired turn. Merge those edits back to the
+	//                   originating workflow-invocation iter so the diff shows
+	//                   on the prompt card that asked for the work. The bridge
+	//                   task IDs come from the synthetic notification itself.
 	if res.SyntheticTurn {
-		dbg("synthetic turn (harness-injected user message) — skipping record")
-		return nil
+		if len(res.Files) == 0 {
+			dbg("synthetic turn (no files) — skipping record")
+			return nil
+		}
+		// Use the synthetic anchor's task IDs as the bridge.
+		res.SyntheticWorkflowTaskIDs = append(res.SyntheticWorkflowTaskIDs,
+			extractTaskIDsFromNotification(res.UserPrompt)...)
+		// Don't leak the notification XML as user_prompt.
+		res.UserPrompt = ""
+		dbg("synthetic turn with %d file edits — attempting workflow merge via task IDs %v",
+			len(res.Files), res.SyntheticWorkflowTaskIDs)
 	}
 	for attempt := 0; res.Implementation == "" && len(res.Files) == 0 && attempt < 3; attempt++ {
 		delay := time.Duration(200*(attempt+1)) * time.Millisecond

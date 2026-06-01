@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 type agentMetadata struct {
@@ -17,7 +16,14 @@ type agentMetadata struct {
 }
 
 var (
-	fallbackSessionID = fmt.Sprintf("mcp-%d-%d", os.Getpid(), time.Now().UTC().UnixNano())
+	// fallbackSessionID is what we use when the agent (claude-code, codex)
+	// hasn't given us its own session UUID via env var. Keyed on the PARENT
+	// process PID (the agent itself), not our own PID, so it stays stable
+	// across vibelog-mcp subprocess restarts within a single agent session.
+	// Without this stability, the dashboard's concurrency detector would
+	// read every MCP-process restart as a fresh "session" and false-positive
+	// every file the user touches as an inter-session overwrite.
+	fallbackSessionID = fmt.Sprintf("ppid-%d", os.Getppid())
 	parentAgentOnce   sync.Once
 	parentAgentHint   string
 )
